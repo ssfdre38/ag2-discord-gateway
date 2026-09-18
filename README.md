@@ -19,7 +19,7 @@
 
 ### 1. Install Dependencies
 ```bash
-git clone https://github.com/.../ag2-discord-gateway.git
+git clone https://github.com/ssfdre38/ag2-discord-gateway.git
 cd ag2-discord-gateway
 npm install
 ```
