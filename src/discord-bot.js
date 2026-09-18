@@ -8,6 +8,7 @@ import fs from "fs";
 import { config } from "./config.js";
 import { AgySessionManager } from "./agy-session.js";
 import { HmbMemoryEngine } from "./hmb-memory.js";
+import { createHttpActuationServer } from "./http-server.js";
 
 export function createDiscordBot() {
   const client = new Client({
@@ -36,6 +37,17 @@ export function createDiscordBot() {
       }
     }
 
+    if (config.enableHttpApi) {
+      try {
+        const httpServer = createHttpActuationServer(client, hmb, config);
+        httpServer.listen(config.httpPort, config.httpHost, () => {
+          // Listening locally
+        });
+      } catch (err) {
+        console.error(`[Actuation Server Error] ${err.message}`);
+      }
+    }
+
     console.log("╔══════════════════════════════════════════════════════════════════╗");
     console.log(`║  ⚡ [AG2 Discord Gateway] Online as: ${client.user.tag.padEnd(25)} ║`);
     console.log("╠══════════════════════════════════════════════════════════════════╣");
@@ -43,6 +55,7 @@ export function createDiscordBot() {
     console.log(`║  AG2 CLI Path  : ${config.agyPath}`);
     console.log(`║  Bound Session : ${agy.getSessionId() || "Dynamic (Auto-retained)"}`);
     console.log(`║  HMB Memory    : ${config.enableHmb ? `Active (${hmb.getMemoryCount()} anchors in .hmb)` : "Disabled"}`);
+    console.log(`║  Actuation API : ${config.enableHttpApi ? `Active (http://${config.httpHost}:${config.httpPort})` : "Disabled"}`);
     console.log(`║  Admin Users   : ${config.adminUsers.length ? config.adminUsers.join(", ") : "All Users (Open)"}`);
     console.log(`║  Safe Mode     : ${config.safeMode ? "Enabled (Non-admins sandboxed)" : "Disabled"}`);
     console.log(`║  Require @     : ${config.requireMention ? "Enabled (@Mention, Reply, or DM)" : "Disabled"}`);

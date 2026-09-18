@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node tests/hmb.test.js"
+    "test": "node tests/hmb.test.js && node tests/actuation.test.js"
   },
   "dependencies": {
     "discord.js": "^14.16.3",

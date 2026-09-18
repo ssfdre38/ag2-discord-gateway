@@ -81,6 +81,47 @@ npm start
 
 ---
 
+## ⚡ Outbound Actuation (AG2 $\to$ Discord)
+
+The gateway includes a local loopback API (`http://127.0.0.1:18895`) and stdio Model Context Protocol (MCP) server so AG2 agents, IDEs, and CLI scripts can actuate Discord proactively.
+
+### 1. Connecting AG2 via MCP
+Add the gateway to your Antigravity / AG2 `mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "discord-gateway": {
+      "command": "node",
+      "args": ["C:/Users/admin/source/ag2-discord-gateway/src/mcp-server.js"]
+    }
+  }
+}
+```
+**Tools Available to AG2:**
+- `discord_post_message({ message, channelId? })`: Post directly to Discord.
+- `discord_read_recent({ channelId?, limit? })`: Read recent channel history.
+- `discord_get_status()`: Get gateway health, bot tag, and channel list.
+- `hmb_store_memory({ concept, content, category? })`: Store a high-salience memory anchor.
+- `hmb_query_memory({ query, topK? })`: Query the 64-bit `.hmb` vault with semantic search.
+
+### 2. Instant CLI Tool
+You can actuate Discord from PowerShell or terminal scripts:
+```bash
+# Check status
+node src/cli.js status
+
+# Post a message to Discord
+node src/cli.js send "Build complete on main branch! 🚀"
+
+# Read recent channel history
+node src/cli.js history --limit 5
+
+# Query long-term memory
+node src/cli.js recall "memory architecture"
+```
+
+---
+
 ## ⚙️ Configuration Reference
 
 | Variable | Description | Default |
@@ -95,6 +136,9 @@ npm start
 | `ENABLE_HMB` | Enable 64-bit Hierarchical Memory Bank | `true` |
 | `HMB_VAULT_PATH` | Filepath for `.hmb` binary vault storage | `data/memory_vault.hmb` |
 | `HMB_TOP_K` | Number of relevant memories injected per prompt | `3` |
+| `ENABLE_HTTP_API` | Enable local loopback actuation API | `true` |
+| `HTTP_PORT` | Port for local loopback API and MCP bridge | `18895` |
+| `HTTP_HOST` | Host binding for local loopback API | `127.0.0.1` |
 
 ---
 

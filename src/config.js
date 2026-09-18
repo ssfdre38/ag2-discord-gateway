@@ -50,5 +50,8 @@ export const config = {
     .filter(Boolean),
   enableHmb: process.env.ENABLE_HMB !== "false",
   hmbVaultPath: process.env.HMB_VAULT_PATH || path.join(process.cwd(), "data", "memory_vault.hmb"),
-  hmbTopK: parseInt(process.env.HMB_TOP_K || "3", 10)
+  hmbTopK: parseInt(process.env.HMB_TOP_K || "3", 10),
+  enableHttpApi: process.env.ENABLE_HTTP_API !== "false",
+  httpPort: parseInt(process.env.HTTP_PORT || "18895", 10),
+  httpHost: process.env.HTTP_HOST || "127.0.0.1"
 };
