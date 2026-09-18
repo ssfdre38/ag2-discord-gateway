@@ -34,6 +34,12 @@ export const config = {
   agyPath: findAgyExecutable(),
   requireMention: process.env.REQUIRE_MENTION !== "false",
   throttleMs: parseInt(process.env.THROTTLE_MS || "400", 10),
+  systemPrompt: process.env.SYSTEM_PROMPT || "",
+  safeMode: process.env.SAFE_MODE !== "false",
+  adminUsers: (process.env.ADMIN_USERS || "")
+    .split(",")
+    .map(u => u.trim())
+    .filter(Boolean),
   allowedChannels: (process.env.ALLOWED_CHANNELS || "")
     .split(",")
     .map(c => c.trim())
