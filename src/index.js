@@ -3,7 +3,7 @@ import { createDiscordBot } from "./discord-bot.js";
 
 if (!config.discordToken) {
   console.error("❌ ERROR: DISCORD_TOKEN is missing!");
-  console.error("Please create a .env file based on .env.example and provide your Discord Bot Token.");
+  console.error("Please copy example.env (or .env.example) to .env and provide your Discord Bot Token.");
   process.exit(1);
 }
 

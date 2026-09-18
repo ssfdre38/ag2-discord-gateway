@@ -27,7 +27,9 @@ npm install
 ### 2. Configure Environment (`.env`)
 Copy the example environment file:
 ```bash
-cp .env.example .env
+cp example.env .env
+# or on Windows PowerShell:
+cp example.env .env
 ```
 Edit `.env` and paste your Discord bot token:
 ```env
