@@ -8,6 +8,7 @@
 ## 🌟 Highlights
 
 - **Native AG2 Session Binding**: Talks directly to your active Antigravity session (`agy.exe --conversation <id>`). Whatever codebase, files, instructions, or tools your AG2 session has, your Discord bot knows too.
+- **🏛️ 64-Bit HMB Memory Engine**: Direct TypeScript/JS port of Daniel's `haven-cpp` Hierarchical Memory Bank. Provides lightning-fast semantic cosine recall with salience and emotional resonance, preventing context drift across conversations.
 - **Universal Identity**: Works with any bot name or avatar (`@gaming2gamers`, `@Ash`, etc.). Automatically detects its own Discord identity on login.
 - **Real-Time Dynamic Token Streaming**: Streams tokens into Discord message edits in real time with rate-limit safety throttling (400ms).
 - **Zero API Key Needed**: Leverages your existing Google Ultra / Antigravity desktop session via `agy.exe` headless streaming IPC.
@@ -67,6 +68,19 @@ npm start
 
 ---
 
+## 🧠 In-Chat Commands
+
+| Command | Permission | Description |
+| :--- | :--- | :--- |
+| `!hmb` / `!memory` | All | Displays memory vault statistics, anchor counts, and categories. |
+| `!remember <concept> \| <content>` | Admin | Stores a permanent/episodic memory anchor into the 64-bit `.hmb` vault. |
+| `!recall <query>` | All | Tests semantic cosine search against the memory vault. |
+| `!session` | All | Displays the current active AG2 session UUID. |
+| `!bind <uuid>` | Admin | Binds the bot to a specific existing AG2 conversation session. |
+| `!unbind` | Admin | Unbinds session so the bot starts a fresh conversation turn. |
+
+---
+
 ## ⚙️ Configuration Reference
 
 | Variable | Description | Default |
@@ -78,6 +92,9 @@ npm start
 | `BOT_NICKNAMES` | Extra trigger words (case-insensitive) | `gaming2gamers,g2g,ash` |
 | `THROTTLE_MS` | Delay between Discord message edits during streaming | `400` |
 | `AG2_CLI_PATH` | Path to `agy.exe` | *Auto-detected from system* |
+| `ENABLE_HMB` | Enable 64-bit Hierarchical Memory Bank | `true` |
+| `HMB_VAULT_PATH` | Filepath for `.hmb` binary vault storage | `data/memory_vault.hmb` |
+| `HMB_TOP_K` | Number of relevant memories injected per prompt | `3` |
 
 ---
 

@@ -47,5 +47,8 @@ export const config = {
   nicknames: (process.env.BOT_NICKNAMES || "gaming2gamers,g2g,ash")
     .split(",")
     .map(n => n.trim().toLowerCase())
-    .filter(Boolean)
+    .filter(Boolean),
+  enableHmb: process.env.ENABLE_HMB !== "false",
+  hmbVaultPath: process.env.HMB_VAULT_PATH || path.join(process.cwd(), "data", "memory_vault.hmb"),
+  hmbTopK: parseInt(process.env.HMB_TOP_K || "3", 10)
 };

@@ -4,8 +4,10 @@ import {
   Partials,
   ActivityType
 } from "discord.js";
+import fs from "fs";
 import { config } from "./config.js";
 import { AgySessionManager } from "./agy-session.js";
+import { HmbMemoryEngine } from "./hmb-memory.js";
 
 export function createDiscordBot() {
   const client = new Client({
@@ -19,15 +21,28 @@ export function createDiscordBot() {
   });
 
   const agy = new AgySessionManager();
+  const hmb = new HmbMemoryEngine({
+    vaultPath: config.hmbVaultPath
+  });
   let turnQueue = Promise.resolve();
 
   client.once("ready", () => {
+    if (config.enableHmb) {
+      if (fs.existsSync(config.hmbVaultPath)) {
+        hmb.loadFromHmb(config.hmbVaultPath);
+      } else {
+        hmb.initializeCoreIdentity(client.user.username);
+        hmb.saveToHmb(config.hmbVaultPath);
+      }
+    }
+
     console.log("╔══════════════════════════════════════════════════════════════════╗");
     console.log(`║  ⚡ [AG2 Discord Gateway] Online as: ${client.user.tag.padEnd(25)} ║`);
     console.log("╠══════════════════════════════════════════════════════════════════╣");
     console.log(`║  Bot User ID   : ${client.user.id}`);
     console.log(`║  AG2 CLI Path  : ${config.agyPath}`);
     console.log(`║  Bound Session : ${agy.getSessionId() || "Dynamic (Auto-retained)"}`);
+    console.log(`║  HMB Memory    : ${config.enableHmb ? `Active (${hmb.getMemoryCount()} anchors in .hmb)` : "Disabled"}`);
     console.log(`║  Admin Users   : ${config.adminUsers.length ? config.adminUsers.join(", ") : "All Users (Open)"}`);
     console.log(`║  Safe Mode     : ${config.safeMode ? "Enabled (Non-admins sandboxed)" : "Disabled"}`);
     console.log(`║  Require @     : ${config.requireMention ? "Enabled (@Mention, Reply, or DM)" : "Disabled"}`);
@@ -123,6 +138,84 @@ export function createDiscordBot() {
       return;
     }
 
+    // ─── HMB Memory Bank Commands ───────────────────────────────────────────
+    if (commandLower === "!hmb" || commandLower === "!memory" || commandLower === "hmb" || commandLower === "memory") {
+      const count = hmb.getMemoryCount();
+      const allMemories = hmb.getAllMemories();
+      const topCategories = {};
+      for (const m of allMemories) {
+        topCategories[m.category] = (topCategories[m.category] || 0) + 1;
+      }
+      const catSummary = Object.entries(topCategories)
+        .map(([cat, n]) => `${cat} (${n})`)
+        .join(", ") || "None";
+
+      await message.reply(
+        `🏛️ **Haven Memory Bank (HMB 64-Bit)**\n` +
+        `• **Status**: ${config.enableHmb ? "Active ⚡" : "Disabled"}\n` +
+        `• **Anchors Count**: \`${count}\`\n` +
+        `• **Categories**: ${catSummary}\n` +
+        `• **Vault File**: \`${config.hmbVaultPath}\`\n` +
+        `• **Commands**: \`!remember <concept> | <content>\` or \`!recall <query>\``
+      );
+      return;
+    }
+
+    if (commandLower.startsWith("!remember ") || commandLower.startsWith("remember ")) {
+      if (!isAdmin) {
+        await message.reply("⛔ **Permission Denied**: Only authorized administrators can commit anchors to the HMB vault.");
+        return;
+      }
+
+      const raw = cleanText.replace(/^!?remember\s+/i, "").trim();
+      const parts = raw.split("|").map(p => p.trim());
+      const concept = parts[0];
+      const content = parts.length > 1 ? parts.slice(1).join("|").trim() : parts[0];
+
+      if (!concept) {
+        await message.reply("⚠️ **Usage**: `!remember <concept> | <content>` (e.g. `!remember Server Lore | Shane founded Gaming2Gamers`)");
+        return;
+      }
+
+      const anchor = hmb.addMemory({
+        concept_name: concept,
+        text_content: content,
+        category: "EPISODIC",
+        weight: 1.0,
+        emotional_salience: 0.95
+      });
+      hmb.saveToHmb(config.hmbVaultPath);
+
+      await message.reply(
+        `🧠 **Memory Anchor Committed to 64-Bit Vault**:\n` +
+        `• **Concept**: \`${anchor.concept_name}\`\n` +
+        `• **Content**: ${anchor.text_content}\n` +
+        `• **ID**: \`#${anchor.id}\` | **Salience**: \`${anchor.weight.toFixed(2)}\` | **Total Anchors**: \`${hmb.getMemoryCount()}\``
+      );
+      return;
+    }
+
+    if (commandLower.startsWith("!recall ") || commandLower.startsWith("recall ")) {
+      const query = cleanText.replace(/^!?recall\s+/i, "").trim();
+      if (!query) {
+        await message.reply("⚠️ **Usage**: `!recall <query>` (e.g. `!recall temporal cortex`)");
+        return;
+      }
+
+      const results = hmb.searchTopK(query, 3, 0.10);
+      if (results.length === 0) {
+        await message.reply(`🔍 **No matching memory anchors found** for: *"${query}"*`);
+        return;
+      }
+
+      let reply = `🔍 **HMB Semantic Recall for**: *"${query}"*\n`;
+      for (const res of results) {
+        reply += `• **[${res.anchor.category}] ${res.anchor.concept_name}** (Score: \`${res.score.toFixed(3)}\`)\n  _${res.anchor.text_content}_\n`;
+      }
+      await message.reply(reply);
+      return;
+    }
+
     if (!cleanText && (isMentioned || isReplyToBot)) {
       cleanText = "Hello!";
     }
@@ -146,8 +239,17 @@ export function createDiscordBot() {
       let buffer = "";
       let lastEditTime = Date.now();
 
+      let promptToSend = cleanText;
+      if (config.enableHmb) {
+        const memoryContext = hmb.buildContextInjection(cleanText, config.hmbTopK);
+        if (memoryContext) {
+          promptToSend = `${memoryContext}${cleanText}`;
+        }
+        hmb.pushTurn("user", authorName, cleanText);
+      }
+
       try {
-        for await (const delta of agy.runTurn(cleanText, authorName, isAdmin)) {
+        for await (const delta of agy.runTurn(promptToSend, authorName, isAdmin)) {
           buffer += delta;
 
           const now = Date.now();
@@ -162,6 +264,10 @@ export function createDiscordBot() {
 
         // Final message edit flush
         if (buffer.trim()) {
+          if (config.enableHmb) {
+            hmb.pushTurn("assistant", client.user.username, buffer);
+          }
+
           if (buffer.length <= 2000) {
             await replyMessage.edit(buffer);
           } else {
