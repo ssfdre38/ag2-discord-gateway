@@ -62,5 +62,8 @@ export const config = {
   ambientMinSalience: parseFloat(process.env.AMBIENT_MIN_SALIENCE || "0.40"),
   enableVoice: process.env.ENABLE_VOICE !== "false",
   speechBinPath: process.env.SPEECH_HELPER_PATH || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe",
-  enableAutonomousReactions: process.env.ENABLE_AUTONOMOUS_REACTIONS !== "false"
+  enableAutonomousReactions: process.env.ENABLE_AUTONOMOUS_REACTIONS !== "false",
+  enableAutoThreads: process.env.ENABLE_AUTO_THREADS !== "false",
+  artifactDir: process.env.ARTIFACT_DIR || path.join(process.cwd(), "data", "artifacts"),
+  maxInlineCodeLines: parseInt(process.env.MAX_INLINE_CODE_LINES || "25", 10)
 };

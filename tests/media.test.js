@@ -105,6 +105,43 @@ async function run() {
     if (fs.existsSync(testImg)) fs.unlinkSync(testImg);
   });
 
+  it("extractOutgoingMedia parses [ARTIFACT: ...] tags into file attachments", () => {
+    const responseWithTag = "Here is your script:\n[ARTIFACT: deploy_hook.py]\nimport os\nprint('Deploying!')\n[/ARTIFACT]\nAll done!";
+    const res = pipeline.extractOutgoingMedia(responseWithTag);
+
+    assert.strictEqual(res.filesToAttach.length, 1);
+    assert(res.filesToAttach[0].endsWith("deploy_hook.py"));
+    assert(fs.existsSync(res.filesToAttach[0]));
+    assert(res.cleanText.includes("📄 **Attached File**: `deploy_hook.py`"));
+    assert(!res.cleanText.includes("[ARTIFACT:"));
+
+    // Cleanup
+    if (fs.existsSync(res.filesToAttach[0])) fs.unlinkSync(res.filesToAttach[0]);
+  });
+
+  it("extractOutgoingMedia egresses large code blocks (>25 lines) as file attachments", () => {
+    const longCodeLines = Array.from({ length: 30 }, (_, i) => `console.log("Processing step ${i + 1}");`).join("\n");
+    const responseWithLongCode = `Check out this pipeline logic:\n\`\`\`javascript\n${longCodeLines}\n\`\`\`\nHope this helps!`;
+
+    const res = pipeline.extractOutgoingMedia(responseWithLongCode);
+    assert.strictEqual(res.filesToAttach.length, 1);
+    assert(res.filesToAttach[0].endsWith(".js"));
+    assert(fs.existsSync(res.filesToAttach[0]));
+    assert(res.cleanText.includes("📄 **Attached File**:"));
+    assert(res.cleanText.includes("(30 lines"));
+    assert(res.cleanText.includes("omitted — full code attached below"));
+
+    // Cleanup
+    if (fs.existsSync(res.filesToAttach[0])) fs.unlinkSync(res.filesToAttach[0]);
+  });
+
+  it("extractOutgoingMedia preserves short code blocks inline", () => {
+    const shortCode = "```python\nprint('hello')\n```";
+    const res = pipeline.extractOutgoingMedia(`Inline test:\n${shortCode}\nDone.`);
+    assert.strictEqual(res.filesToAttach.length, 0);
+    assert(res.cleanText.includes(shortCode));
+  });
+
   await itAsync("ffmpeg keyframe and storyboard extraction runs on synthetic media", async () => {
     // Generate a tiny 1-second synthetic GIF using ffmpeg testsrc
     const testVideo = path.resolve(process.cwd(), "data", "test_media_cache", "synthetic_test.gif");

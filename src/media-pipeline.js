@@ -13,6 +13,8 @@ import { execFile } from "child_process";
 export class MediaPipeline {
   constructor(options = {}) {
     this.cacheDir = options.cacheDir || path.resolve(process.cwd(), "data", "media_cache");
+    this.artifactDir = options.artifactDir || path.resolve(process.cwd(), "data", "artifacts");
+    this.maxInlineCodeLines = options.maxInlineCodeLines ?? 25;
     this.ocrBinPath = options.ocrBinPath || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\ocr_helper.exe";
     this.maxAgeMs = options.maxAgeMs || 24 * 60 * 60 * 1000; // 24 hours
     this.ensureCacheDir();
@@ -25,6 +27,13 @@ export class MediaPipeline {
         fs.mkdirSync(this.cacheDir, { recursive: true });
       } catch (err) {
         console.error(`[MediaPipeline] Failed to create cache dir: ${err.message}`);
+      }
+    }
+    if (!fs.existsSync(this.artifactDir)) {
+      try {
+        fs.mkdirSync(this.artifactDir, { recursive: true });
+      } catch (err) {
+        console.error(`[MediaPipeline] Failed to create artifact dir: ${err.message}`);
       }
     }
   }
@@ -406,20 +415,25 @@ export class MediaPipeline {
   }
 
   /**
-   * Scans an AI response text for generated or referenced images/gifs to upload as Discord attachments.
+   * Scans an AI response text for generated or referenced images/gifs, code artifacts,
+   * diffs, patches, and logs to upload as native Discord attachments.
+   * Also compresses giant code blocks into clean downloadable snippets.
    * @param {string} text - AI response text
+   * @param {Object} [options]
    * @returns {Object} { cleanText, filesToAttach: Array<string> }
    */
-  extractOutgoingMedia(text) {
+  extractOutgoingMedia(text, options = {}) {
     if (!text || typeof text !== "string") return { cleanText: text, filesToAttach: [] };
 
+    let workingText = text;
     const filesToAttach = [];
     const seen = new Set();
+    const maxLines = options.maxInlineCodeLines ?? this.maxInlineCodeLines;
 
     // Pattern 1: Markdown image ![alt](path or file:///path)
     const mdRegex = /!\[.*?\]\((?:file:\/\/\/)?([a-zA-Z]:[^\)\s]+\.(?:png|jpg|jpeg|gif|webp|mp4))\)/gi;
     let match;
-    while ((match = mdRegex.exec(text)) !== null) {
+    while ((match = mdRegex.exec(workingText)) !== null) {
       const candidate = path.normalize(match[1]);
       if (fs.existsSync(candidate) && !seen.has(candidate)) {
         seen.add(candidate);
@@ -427,18 +441,98 @@ export class MediaPipeline {
       }
     }
 
-    // Pattern 2: Standalone Windows absolute path ending in image extension
-    const pathRegex = /(?:file:\/\/\/)?([a-zA-Z]:\\[^\s<>"'`]+\.(?:png|jpg|jpeg|gif|webp|mp4))/gi;
-    while ((match = pathRegex.exec(text)) !== null) {
+    // Pattern 2: Standalone Windows absolute path ending in media or code/log/patch extension
+    const pathRegex = /(?:file:\/\/\/)?([a-zA-Z]:\\[^\s<>"'`]+\.(?:png|jpg|jpeg|gif|webp|mp4|py|js|ts|cs|cpp|c|h|hpp|sh|ps1|diff|patch|json|sql|log|txt))\b/gi;
+    while ((match = pathRegex.exec(workingText)) !== null) {
       const candidate = path.normalize(match[1]);
       if (fs.existsSync(candidate) && !seen.has(candidate)) {
-        seen.add(candidate);
-        filesToAttach.push(candidate);
+        try {
+          const stats = fs.statSync(candidate);
+          if (stats.size > 0 && stats.size <= 8 * 1024 * 1024) {
+            seen.add(candidate);
+            filesToAttach.push(candidate);
+          }
+        } catch {}
       }
+    }
+
+    // Pattern 3: Explicit [ARTIFACT: filename.ext] ... [/ARTIFACT] or [FILE: filename.ext] ... [/FILE] tags
+    const explicitTagRegex = /\[(?:ARTIFACT|FILE):\s*([^\]\r\n]+)\]([\s\S]*?)\[\/(?:ARTIFACT|FILE)\]/gi;
+    workingText = workingText.replace(explicitTagRegex, (fullMatch, filenameRaw, fileBody) => {
+      const filename = path.basename(filenameRaw.trim());
+      if (!filename) return fullMatch;
+      const artifactPath = path.join(this.artifactDir, filename);
+      try {
+        fs.writeFileSync(artifactPath, fileBody.trim(), "utf8");
+        if (!seen.has(artifactPath)) {
+          seen.add(artifactPath);
+          filesToAttach.push(artifactPath);
+        }
+        const lineCount = fileBody.trim().split("\n").length;
+        const kb = (Buffer.byteLength(fileBody, "utf8") / 1024).toFixed(1);
+        return `📄 **Attached File**: \`${filename}\` (${lineCount} lines, ${kb} KB)`;
+      } catch {
+        return fullMatch;
+      }
+    });
+
+    // Pattern 4: Automatic Large Code Block Egress (saves > 25 lines as downloadable attachments)
+    if (maxLines > 0) {
+      const extMap = {
+        python: ".py", py: ".py",
+        javascript: ".js", js: ".js",
+        typescript: ".ts", ts: ".ts",
+        diff: ".diff", patch: ".patch",
+        json: ".json",
+        csharp: ".cs", cs: ".cs",
+        cpp: ".cpp", "c++": ".cpp", c: ".c", h: ".h", hpp: ".hpp",
+        shell: ".sh", bash: ".sh", sh: ".sh",
+        powershell: ".ps1", ps1: ".ps1",
+        sql: ".sql",
+        rust: ".rs", rs: ".rs",
+        html: ".html", css: ".css",
+        yaml: ".yaml", yml: ".yaml",
+        toml: ".toml",
+        markdown: ".md", md: ".md",
+        text: ".txt"
+      };
+
+      let codeBlockCount = 0;
+      const codeBlockRegex = /```([a-zA-Z0-9_-]+)?(?::([a-zA-Z0-9_.-]+))?\r?\n([\s\S]*?)```/g;
+      workingText = workingText.replace(codeBlockRegex, (fullMatch, langTag, namedFile, codeBody) => {
+        const codeTrimmed = codeBody.trim();
+        const lines = codeTrimmed.split("\n");
+        if (lines.length <= maxLines && codeTrimmed.length <= 1200) {
+          return fullMatch; // Keep short code snippets inline in chat
+        }
+
+        codeBlockCount++;
+        const lang = (langTag || "text").toLowerCase();
+        const ext = extMap[lang] || ".txt";
+        const filename = namedFile
+          ? path.basename(namedFile)
+          : `code_artifact_${Date.now()}_${codeBlockCount}${ext}`;
+
+        const artifactPath = path.join(this.artifactDir, filename);
+        try {
+          fs.writeFileSync(artifactPath, codeBody, "utf8");
+          if (!seen.has(artifactPath)) {
+            seen.add(artifactPath);
+            filesToAttach.push(artifactPath);
+          }
+
+          const previewLines = lines.slice(0, 8).join("\n");
+          const kb = (Buffer.byteLength(codeBody, "utf8") / 1024).toFixed(1);
+
+          return `📄 **Attached File**: \`${filename}\` (${lines.length} lines, ${kb} KB)\n\`\`\`${langTag || ""}\n${previewLines}\n... [${lines.length - 8} lines omitted — full code attached below] ...\n\`\`\``;
+        } catch {
+          return fullMatch;
+        }
+      });
     }
 
     return {
-      cleanText: text,
+      cleanText: workingText,
       filesToAttach
     };
   }

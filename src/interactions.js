@@ -121,7 +121,18 @@ export function getSlashCommandDefinitions() {
         )
     );
 
-  return [vitalsCommand, memoryCommand, voiceCommand];
+  // 4. /thread
+  const threadCommand = new SlashCommandBuilder()
+    .setName("thread")
+    .setDescription("Spawn a dedicated Discord thread for an AG2 task, swarm, or deep diagnostic")
+    .addStringOption(opt =>
+      opt
+        .setName("task")
+        .setDescription("Task prompt or instructions to execute cleanly inside the thread")
+        .setRequired(true)
+    );
+
+  return [vitalsCommand, memoryCommand, voiceCommand, threadCommand];
 }
 
 /**
@@ -378,6 +389,107 @@ export async function handleInteraction(interaction, ctx) {
           await interaction.editReply(`🗣️ **Speaking in voice**: "${text}"`);
           return;
         }
+      }
+
+      // 4. /thread
+      if (commandName === "thread") {
+        if (interaction.channel.isThread()) {
+          await interaction.reply({
+            content: "⚠️ Already inside a thread! Please run `/thread` in a main text channel.",
+            ephemeral: true
+          });
+          return;
+        }
+
+        await interaction.deferReply();
+        const taskPrompt = interaction.options.getString("task");
+        const authorName = interaction.member?.displayName || interaction.user.username;
+
+        let thread;
+        try {
+          const threadTitle = `🧵 ${taskPrompt.slice(0, 45).replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "Agent Run"}`;
+          thread = await interaction.channel.threads.create({
+            name: threadTitle,
+            autoArchiveDuration: 60,
+            reason: `AG2 Dedicated Thread spawned by ${authorName}`
+          });
+        } catch (tErr) {
+          await interaction.editReply(`⚠️ **Failed to create thread**: ${tErr.message}`);
+          return;
+        }
+
+        await interaction.editReply(`🧵 **Started dedicated execution thread**: <#${thread.id}>\n*Granular token streaming and artifacts will flow inside the thread.*`);
+
+        const threadPlaceholder = await thread.send("*Initializing dedicated AG2 context & running task... ✨*");
+        let buffer = "";
+        let lastEditTime = Date.now();
+
+        try {
+          for await (const delta of agy.runTurn(taskPrompt, authorName, true)) {
+            buffer += delta;
+            const now = Date.now();
+            if (now - lastEditTime >= (config.throttleMs || 400)) {
+              const textToDisplay = buffer.length > 2000 ? buffer.slice(-1990) + "..." : buffer;
+              try {
+                await threadPlaceholder.edit(textToDisplay);
+                lastEditTime = now;
+              } catch {}
+            }
+          }
+
+          if (buffer.trim()) {
+            const { cleanText: finalContent, reactions } = ctx.reactionEngine
+              ? ctx.reactionEngine.extractReactionTags(buffer)
+              : { cleanText: buffer, reactions: [] };
+
+            const mediaPipeline = ctx.mediaPipeline || (await import("./media-pipeline.js")).getMediaPipeline();
+            const { cleanText: finalClean, filesToAttach } = mediaPipeline.extractOutgoingMedia(finalContent);
+
+            if (filesToAttach.length > 0) {
+              if (finalClean.length <= 2000) {
+                await threadPlaceholder.edit({
+                  content: finalClean,
+                  files: filesToAttach,
+                  components: [createInteractiveButtons()]
+                });
+              } else {
+                await threadPlaceholder.edit(finalClean.slice(0, 2000));
+                for (let i = 2000; i < finalClean.length; i += 2000) {
+                  const chunk = finalClean.slice(i, i + 2000);
+                  const isLast = (i + 2000 >= finalClean.length);
+                  await thread.send({
+                    content: chunk,
+                    files: isLast ? filesToAttach : [],
+                    components: isLast ? [createInteractiveButtons()] : []
+                  });
+                }
+              }
+            } else {
+              if (finalClean.length <= 2000) {
+                await threadPlaceholder.edit({
+                  content: finalClean,
+                  components: [createInteractiveButtons()]
+                });
+              } else {
+                await threadPlaceholder.edit(finalClean.slice(0, 2000));
+                for (let i = 2000; i < finalClean.length; i += 2000) {
+                  const chunk = finalClean.slice(i, i + 2000);
+                  const isLast = (i + 2000 >= finalClean.length);
+                  await thread.send({
+                    content: chunk,
+                    components: isLast ? [createInteractiveButtons()] : []
+                  });
+                }
+              }
+            }
+            await threadPlaceholder.react("✨").catch(() => {});
+          } else {
+            await threadPlaceholder.edit("*(Done - no text output)*");
+          }
+        } catch (taskErr) {
+          await threadPlaceholder.edit(`⚠️ **[AG2 Execution Error]**: ${taskErr.message}`);
+        }
+        return;
       }
     }
   } catch (err) {

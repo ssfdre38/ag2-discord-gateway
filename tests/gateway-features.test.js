@@ -117,10 +117,10 @@ async function run() {
 
   it("getSlashCommandDefinitions generates valid JSON schemas for Discord API", () => {
     const defs = getSlashCommandDefinitions();
-    assert.strictEqual(defs.length, 3);
+    assert.strictEqual(defs.length, 4);
 
     const names = defs.map(d => d.name);
-    assert.deepStrictEqual(names, ["vitals", "memory", "voice"]);
+    assert.deepStrictEqual(names, ["vitals", "memory", "voice", "thread"]);
 
     const memCmd = defs.find(d => d.name === "memory");
     const json = memCmd.toJSON();
@@ -135,6 +135,11 @@ async function run() {
     assert.ok(voiceSubNames.includes("join"));
     assert.ok(voiceSubNames.includes("leave"));
     assert.ok(voiceSubNames.includes("speak"));
+
+    const threadCmd = defs.find(d => d.name === "thread");
+    const threadJson = threadCmd.toJSON();
+    assert.strictEqual(threadJson.options[0].name, "task");
+    assert.strictEqual(threadJson.options[0].required, true);
   });
 
   // ─── 3. VOICE MANAGER INTERFACE TESTS ──────────────────────────────────

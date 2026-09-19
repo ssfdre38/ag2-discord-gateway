@@ -448,12 +448,43 @@ export function createDiscordBot() {
         }
       }
 
+      // Check for Thread Command or Swarm / Heavy Operation Keywords
+      let targetChannel = message.channel;
+      const isThreadCommand = /^(?:!thread\b|thread:)/i.test(cleanPromptText);
+      const hasSwarmKeywords = (config.enableAutoThreads !== false) &&
+        /\b(swarm|agent swarm|run diagnostic|full audit|deep audit|benchmark run|heavy run|in a thread|into a thread)\b/i.test(cleanPromptText);
+
+      if ((isThreadCommand || hasSwarmKeywords) && !isDM && !message.channel.isThread() && typeof message.startThread === "function") {
+        try {
+          if (isThreadCommand) {
+            cleanPromptText = cleanPromptText.replace(/^(?:!thread\s*|thread:\s*)/i, "").trim();
+            if (!cleanPromptText) cleanPromptText = "Run task diagnostics and execution.";
+          }
+          const threadTitle = `🧵 ${cleanPromptText.slice(0, 45).replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "Agent Swarm Run"}`;
+          const spawnedThread = await message.startThread({
+            name: threadTitle,
+            autoArchiveDuration: 60,
+            reason: `AG2 Swarm Thread spawned by ${authorName}`
+          });
+          targetChannel = spawnedThread;
+          await message.react("🧵").catch(() => {});
+        } catch (tErr) {
+          console.warn(`[AutoThread] Could not spawn thread: ${tErr.message}`);
+        }
+      }
+
       let replyMessage = null;
       try {
+        const isThread = targetChannel.isThread?.() || targetChannel.id !== message.channelId;
         const placeholder = inboundMediaRecords.length > 0
           ? "*Inspecting media & thinking... 🎨✨*"
-          : "*Thinking... ✨*";
-        replyMessage = await message.reply(placeholder);
+          : isThread
+            ? "*Dedicated execution thread active. Running task... 🧵✨*"
+            : "*Thinking... ✨*";
+
+        replyMessage = isThread
+          ? await targetChannel.send(placeholder)
+          : await message.reply(placeholder);
       } catch (err) {
         console.error(`[Discord] Failed to send reply placeholder: ${err.message}`);
         return;
@@ -505,22 +536,22 @@ export function createDiscordBot() {
             hmb.pushTurn("assistant", client.user.username, finalContent);
           }
 
-          const { filesToAttach } = mediaPipeline.extractOutgoingMedia(finalContent);
+          const { cleanText: finalClean, filesToAttach } = mediaPipeline.extractOutgoingMedia(finalContent);
           const interactiveComponents = [createInteractiveButtons()];
 
           if (filesToAttach.length > 0) {
-            if (finalContent.length <= 2000) {
+            if (finalClean.length <= 2000) {
               await replyMessage.edit({
-                content: finalContent,
+                content: finalClean,
                 files: filesToAttach,
                 components: interactiveComponents
               });
             } else {
-              await replyMessage.edit(finalContent.slice(0, 2000));
-              for (let i = 2000; i < finalContent.length; i += 2000) {
-                const chunk = finalContent.slice(i, i + 2000);
-                const isLast = (i + 2000 >= finalContent.length);
-                await message.channel.send({
+              await replyMessage.edit(finalClean.slice(0, 2000));
+              for (let i = 2000; i < finalClean.length; i += 2000) {
+                const chunk = finalClean.slice(i, i + 2000);
+                const isLast = (i + 2000 >= finalClean.length);
+                await targetChannel.send({
                   content: chunk,
                   files: isLast ? filesToAttach : [],
                   components: isLast ? interactiveComponents : []
@@ -529,17 +560,17 @@ export function createDiscordBot() {
             }
             await replyMessage.react("🎨").catch(() => {});
           } else {
-            if (finalContent.length <= 2000) {
+            if (finalClean.length <= 2000) {
               await replyMessage.edit({
-                content: finalContent,
+                content: finalClean,
                 components: interactiveComponents
               });
             } else {
-              await replyMessage.edit(finalContent.slice(0, 2000));
-              for (let i = 2000; i < finalContent.length; i += 2000) {
-                const chunk = finalContent.slice(i, i + 2000);
-                const isLast = (i + 2000 >= finalContent.length);
-                await message.channel.send({
+              await replyMessage.edit(finalClean.slice(0, 2000));
+              for (let i = 2000; i < finalClean.length; i += 2000) {
+                const chunk = finalClean.slice(i, i + 2000);
+                const isLast = (i + 2000 >= finalClean.length);
+                await targetChannel.send({
                   content: chunk,
                   components: isLast ? interactiveComponents : []
                 });
