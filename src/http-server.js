@@ -8,8 +8,10 @@
 import http from "http";
 import fs from "fs";
 import { getMediaPipeline } from "./media-pipeline.js";
+import { getVoiceManager } from "./voice-manager.js";
+import { getReactionEngine } from "./reaction-engine.js";
 
-export function createHttpActuationServer(client, hmb, config) {
+export function createHttpActuationServer(client, hmb, config, voiceManager = null, reactionEngine = null) {
   const parseJsonBody = (req) => {
     return new Promise((resolve, reject) => {
       let body = "";
@@ -256,6 +258,128 @@ export function createHttpActuationServer(client, hmb, config) {
         }));
 
         sendJson(res, 200, { ok: true, query, results });
+        return;
+      }
+
+      // 7. Expressive Reaction Actuation
+      if (req.method === "POST" && pathname === "/api/react") {
+        const body = await parseJsonBody(req);
+        if (!body.messageId || !body.emoji) {
+          sendJson(res, 400, { ok: false, error: "Fields 'messageId' and 'emoji' are required." });
+          return;
+        }
+
+        const channel = await resolveChannel(body.channelId);
+        if (!channel) {
+          sendJson(res, 404, { ok: false, error: "Target Discord channel could not be resolved." });
+          return;
+        }
+
+        let targetMsg;
+        try {
+          targetMsg = await channel.messages.fetch(body.messageId);
+        } catch {
+          sendJson(res, 404, { ok: false, error: `Message with ID ${body.messageId} not found in channel.` });
+          return;
+        }
+
+        const engine = reactionEngine || getReactionEngine(client);
+        const success = await engine.reactToMessage(targetMsg, body.emoji);
+
+        sendJson(res, 200, {
+          ok: success,
+          messageId: body.messageId,
+          emoji: body.emoji,
+          channelId: channel.id
+        });
+        return;
+      }
+
+      // 8. Voice Channel Presence & Speech Synthesis
+      if (req.method === "POST" && pathname === "/api/voice/join") {
+        const body = await parseJsonBody(req);
+        if (!body.channelId) {
+          sendJson(res, 400, { ok: false, error: "Field 'channelId' is required." });
+          return;
+        }
+
+        let targetChan;
+        try {
+          targetChan = await client.channels.fetch(body.channelId);
+        } catch {}
+
+        if (!targetChan) {
+          sendJson(res, 404, { ok: false, error: `Channel ${body.channelId} not found.` });
+          return;
+        }
+
+        const vm = voiceManager || getVoiceManager();
+        const result = await vm.join(targetChan);
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/voice/leave") {
+        const body = await parseJsonBody(req);
+        const guildId = body.guildId || Array.from(client.guilds.cache.keys())[0];
+        if (!guildId) {
+          sendJson(res, 400, { ok: false, error: "Field 'guildId' is required or could not be determined." });
+          return;
+        }
+
+        const vm = voiceManager || getVoiceManager();
+        const result = vm.leave(guildId);
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/voice/speak") {
+        const body = await parseJsonBody(req);
+        if (!body.text || typeof body.text !== "string") {
+          sendJson(res, 400, { ok: false, error: "Field 'text' is required and must be non-empty." });
+          return;
+        }
+
+        const guildId = body.guildId || Array.from(client.guilds.cache.keys())[0];
+        if (!guildId) {
+          sendJson(res, 400, { ok: false, error: "Field 'guildId' could not be resolved." });
+          return;
+        }
+
+        const vm = voiceManager || getVoiceManager();
+        const result = await vm.speakText(guildId, body.text, {
+          voice: body.voice,
+          rate: body.rate,
+          volume: body.volume
+        });
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/voice/play") {
+        const body = await parseJsonBody(req);
+        if (!body.filePath || typeof body.filePath !== "string") {
+          sendJson(res, 400, { ok: false, error: "Field 'filePath' is required." });
+          return;
+        }
+
+        const guildId = body.guildId || Array.from(client.guilds.cache.keys())[0];
+        if (!guildId) {
+          sendJson(res, 400, { ok: false, error: "Field 'guildId' could not be resolved." });
+          return;
+        }
+
+        const vm = voiceManager || getVoiceManager();
+        const result = await vm.playAudioFile(guildId, body.filePath);
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/voice/status") {
+        const guildId = searchParams.get("guildId") || Array.from(client.guilds.cache.keys())[0];
+        const vm = voiceManager || getVoiceManager();
+        const status = vm.getStatus(guildId);
+        sendJson(res, 200, { ok: true, guildId, ...status });
         return;
       }
 

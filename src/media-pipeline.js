@@ -231,8 +231,8 @@ export class MediaPipeline {
     return new Promise((resolve) => {
       execFile(
         "ffmpeg",
-        ["-y", "-i", inputPath, "-vframes", "1", "-q:v", "2", outputPath],
-        { timeout: 10000 },
+        ["-nostdin", "-y", "-i", inputPath, "-vframes", "1", "-q:v", "2", "-update", "1", outputPath],
+        { timeout: 30000 },
         (err) => {
           if (!err && fs.existsSync(outputPath)) {
             resolve(outputPath);
@@ -257,8 +257,8 @@ export class MediaPipeline {
       // Scales to 320px width and tiles 3 frames horizontally
       execFile(
         "ffmpeg",
-        ["-y", "-i", inputPath, "-vf", "scale=320:-1,tile=3x1", "-frames:v", "1", outputPath],
-        { timeout: 12000 },
+        ["-nostdin", "-y", "-i", inputPath, "-vf", "scale=320:-1,tile=3x1", "-frames:v", "1", "-update", "1", outputPath],
+        { timeout: 30000 },
         (err) => {
           if (!err && fs.existsSync(outputPath)) {
             resolve(outputPath);

@@ -10,6 +10,13 @@ import { AgySessionManager } from "./agy-session.js";
 import { HmbMemoryEngine } from "./hmb-memory.js";
 import { createHttpActuationServer } from "./http-server.js";
 import { getMediaPipeline } from "./media-pipeline.js";
+import { getVoiceManager } from "./voice-manager.js";
+import { getReactionEngine } from "./reaction-engine.js";
+import {
+  createInteractiveButtons,
+  registerSlashCommands,
+  handleInteraction
+} from "./interactions.js";
 
 export function createDiscordBot() {
   const client = new Client({
@@ -17,7 +24,8 @@ export function createDiscordBot() {
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
-      GatewayIntentBits.DirectMessages
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.GuildVoiceStates
     ],
     partials: [Partials.Channel, Partials.Message]
   });
@@ -27,9 +35,15 @@ export function createDiscordBot() {
     vaultPath: config.hmbVaultPath
   });
   const mediaPipeline = getMediaPipeline();
-  let turnQueue = Promise.resolve();
+  const voiceManager = getVoiceManager({ speechBinPath: config.speechBinPath });
+  const reactionEngine = getReactionEngine(client, {
+    enableAutonomousReactions: config.enableAutonomousReactions
+  });
 
-  client.once("ready", () => {
+  let turnQueue = Promise.resolve();
+  const lastChimeByChannel = new Map(); // channelId -> timestamp
+
+  client.once("ready", async () => {
     if (config.enableHmb) {
       if (fs.existsSync(config.hmbVaultPath)) {
         hmb.loadFromHmb(config.hmbVaultPath);
@@ -41,7 +55,13 @@ export function createDiscordBot() {
 
     if (config.enableHttpApi) {
       try {
-        const httpServer = createHttpActuationServer(client, hmb, config);
+        const httpServer = createHttpActuationServer(
+          client,
+          hmb,
+          config,
+          voiceManager,
+          reactionEngine
+        );
         httpServer.listen(config.httpPort, config.httpHost, () => {
           // Listening locally
         });
@@ -50,6 +70,9 @@ export function createDiscordBot() {
       }
     }
 
+    // Register slash commands across guilds and globally
+    await registerSlashCommands(client);
+
     console.log("╔══════════════════════════════════════════════════════════════════╗");
     console.log(`║  ⚡ [AG2 Discord Gateway] Online as: ${client.user.tag.padEnd(25)} ║`);
     console.log("╠══════════════════════════════════════════════════════════════════╣");
@@ -57,6 +80,9 @@ export function createDiscordBot() {
     console.log(`║  AG2 CLI Path  : ${config.agyPath}`);
     console.log(`║  Bound Session : ${agy.getSessionId() || "Dynamic (Auto-retained)"}`);
     console.log(`║  HMB Memory    : ${config.enableHmb ? `Active (${hmb.getMemoryCount()} anchors in .hmb)` : "Disabled"}`);
+    console.log(`║  Voice WebRTC  : ${config.enableVoice ? "Active (Speech Synthesis & Playback) 🎙️" : "Disabled"}`);
+    console.log(`║  Reactions     : ${config.enableAutonomousReactions ? "Active (Expressive Sentiment & Actuation) 🎭" : "Disabled"}`);
+    console.log(`║  Ambient Listen: Active (Cooldown: ${(config.ambientCooldownMs / 1000).toFixed(0)}s, Min Salience: ${config.ambientMinSalience}) 💬`);
     console.log(`║  Media Pipeline: Active (Images, GIFs, Tenor, ffmpeg keyframes) ║`);
     console.log(`║  Actuation API : ${config.enableHttpApi ? `Active (http://${config.httpHost}:${config.httpPort})` : "Disabled"}`);
     console.log(`║  Admin Users   : ${config.adminUsers.length ? config.adminUsers.join(", ") : "All Users (Open)"}`);
@@ -70,6 +96,19 @@ export function createDiscordBot() {
     });
   });
 
+  // ─── Interactive Buttons & Slash Commands Dispatcher ────────────────────────
+  client.on("interactionCreate", async (interaction) => {
+    await handleInteraction(interaction, {
+      agy,
+      hmb,
+      voiceManager,
+      client,
+      reactionEngine,
+      config
+    });
+  });
+
+  // ─── Inbound Message Pipeline ───────────────────────────────────────────────
   client.on("messageCreate", async (message) => {
     // 1. Ignore bot messages
     if (message.author.bot) return;
@@ -100,14 +139,10 @@ export function createDiscordBot() {
       contentLower.startsWith(`${nick}:`)
     );
 
-    if (config.requireMention && !isDM && !isMentioned && !isReplyToBot && !hasNicknamePrefix) {
-      return;
-    }
+    const isExplicitInvocation = isDM || isMentioned || isReplyToBot || hasNicknamePrefix;
+    const authorName = message.member?.displayName || message.author.displayName || message.author.username;
 
-    // 4. Determine user authorization
-    const isAdmin = config.adminUsers.length === 0 || config.adminUsers.includes(message.author.id);
-
-    // 5. Clean prompt text
+    // 4. Clean prompt text
     let cleanText = message.content;
     cleanText = cleanText.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
 
@@ -115,6 +150,77 @@ export function createDiscordBot() {
       const nickRegex = new RegExp(`^${nick}[,:\\s]+`, "i");
       cleanText = cleanText.replace(nickRegex, "").trim();
     }
+
+    // ─── Proactive Ambient Listener ("Ash Chimes In") ────────────────────────
+    const isAmbientChannel = !isDM && config.ambientChannels.includes(message.channelId);
+
+    if (isAmbientChannel && !isExplicitInvocation) {
+      const now = Date.now();
+      const lastChime = lastChimeByChannel.get(message.channelId) || 0;
+
+      if (now - lastChime >= config.ambientCooldownMs) {
+        const topMemories = config.enableHmb
+          ? hmb.searchTopK(cleanText, 1, config.ambientMinSalience)
+          : [];
+        const isCuriousRemark = /\?$/.test(cleanText.trim()) &&
+          cleanText.length >= 20 &&
+          /(game|gaming|lore|ash|bot|ai|code|dev|shane|daniel|music|mod)/i.test(cleanText);
+
+        if (topMemories.length > 0 || isCuriousRemark) {
+          lastChimeByChannel.set(message.channelId, now);
+
+          turnQueue = turnQueue.then(async () => {
+            try {
+              await message.channel.sendTyping();
+            } catch {}
+
+            const anchorContext = topMemories.length > 0
+              ? `Relevant Vault Lore Anchor: [${topMemories[0].anchor.category}] ${topMemories[0].anchor.concept_name}: ${topMemories[0].anchor.text_content}\n`
+              : "";
+
+            const ambientPrompt =
+              `[Ambient Observation in #${message.channel.name}]:\n` +
+              `User ${authorName} said: "${cleanText}"\n` +
+              anchorContext +
+              `Instruction: Chime in casually, playfully, and concisely as Ash with a brief 1-2 sentence response. Keep it organic and natural. Do NOT act like a generic AI assistant or repeat their words.`;
+
+            let chimeBuffer = "";
+            for await (const delta of agy.runTurn(ambientPrompt, authorName, false)) {
+              chimeBuffer += delta;
+            }
+
+            if (chimeBuffer.trim()) {
+              const { cleanText: cleanedChime, reactions } = reactionEngine.extractReactionTags(chimeBuffer);
+              for (const rx of reactions) {
+                await reactionEngine.reactToMessage(message, rx);
+              }
+              if (reactions.length === 0) {
+                await reactionEngine.autoReact(message, cleanText);
+              }
+
+              if (config.enableHmb) {
+                hmb.pushTurn("assistant", client.user.username, cleanedChime);
+              }
+
+              await message.channel.send({
+                content: cleanedChime,
+                components: [createInteractiveButtons()]
+              });
+            }
+          }).catch(err => {
+            console.error(`[Ambient Listener Error] ${err.message}`);
+          });
+        }
+      }
+      return;
+    }
+
+    if (config.requireMention && !isExplicitInvocation) {
+      return;
+    }
+
+    // 5. Determine user authorization
+    const isAdmin = config.adminUsers.length === 0 || config.adminUsers.includes(message.author.id);
 
     // ─── Admin In-Chat Session Management Commands ───────────────────────────
     const commandLower = cleanText.toLowerCase();
@@ -152,6 +258,87 @@ export function createDiscordBot() {
       agy.resetSession();
       await message.reply("🔄 **Session Unbound**: The gateway will spawn a fresh dedicated session on the next prompt.");
       return;
+    }
+
+    // ─── In-Chat Voice Presence Commands ─────────────────────────────────────
+    if (commandLower.startsWith("!voice ") || commandLower === "!voice" || commandLower === "voice") {
+      const voiceArgs = cleanText.replace(/^!?voice\s*/i, "").trim();
+      const [subAction, ...rest] = voiceArgs.split(" ");
+      const voiceParam = rest.join(" ").trim();
+
+      if (!subAction || subAction.toLowerCase() === "help") {
+        await message.reply(
+          `🎙️ **Ash Voice Channel Commands**:\n` +
+          `• \`!voice join [channelId]\`: Connect Ash to voice channel\n` +
+          `• \`!voice leave\`: Disconnect from voice channel\n` +
+          `• \`!voice speak <text>\`: Synthesize and speak text live in voice\n` +
+          `• \`!voice status\`: Check WebRTC connection and player status`
+        );
+        return;
+      }
+
+      const act = subAction.toLowerCase();
+      if (act === "status") {
+        const st = voiceManager.getStatus(message.guildId);
+        await message.reply(
+          `🎙️ **Voice Status**: ${st.connected ? "Connected 🟢" : "Disconnected ⚪"}\n` +
+          `• **Connection**: \`${st.state}\`\n` +
+          `• **Player**: \`${st.playerState}\``
+        );
+        return;
+      }
+
+      if (act === "join") {
+        let chan = null;
+        if (voiceParam) {
+          try { chan = await client.channels.fetch(voiceParam); } catch {}
+        }
+        if (!chan) {
+          chan = message.member?.voice?.channel;
+        }
+        if (!chan) {
+          await message.reply("⚠️ Please join a voice channel first or specify a valid voice channel ID: `!voice join <channelId>`");
+          return;
+        }
+
+        try {
+          await voiceManager.join(chan);
+          await message.reply(`🎙️ **Joined Voice Channel**: <#${chan.id}>`);
+        } catch (vErr) {
+          await message.reply(`⚠️ **Failed to join voice channel**: ${vErr.message}`);
+        }
+        return;
+      }
+
+      if (act === "leave") {
+        voiceManager.leave(message.guildId);
+        await message.reply("🔇 **Disconnected from voice channel.**");
+        return;
+      }
+
+      if (act === "speak") {
+        if (!voiceParam) {
+          await message.reply("⚠️ **Usage**: `!voice speak <text to speak>`");
+          return;
+        }
+        const st = voiceManager.getStatus(message.guildId);
+        if (!st.connected) {
+          const userVoice = message.member?.voice?.channel;
+          if (userVoice) {
+            try { await voiceManager.join(userVoice); } catch {}
+          } else {
+            await message.reply("⚠️ Ash is not connected to a voice channel. Use `!voice join` first.");
+            return;
+          }
+        }
+        try {
+          await voiceManager.speakText(message.guildId, voiceParam);
+          await message.reply(`🗣️ **Speaking in voice**: "${voiceParam}"`);
+        } catch (sErr) {
+          await message.reply(`⚠️ **Speech synthesis error**: ${sErr.message}`);
+        }
+        return;
+      }
     }
 
     // ─── HMB Memory Bank Commands ───────────────────────────────────────────
@@ -232,8 +419,6 @@ export function createDiscordBot() {
       return;
     }
 
-    const authorName = message.member?.displayName || message.author.displayName || message.author.username;
-
     // 6. Queue turn execution to prevent concurrent SQLite locks
     turnQueue = turnQueue.then(async () => {
       try {
@@ -304,33 +489,60 @@ export function createDiscordBot() {
           }
         }
 
-        // Final message edit flush with Outbound Media Attachment detection
+        // Final message edit flush with Outbound Media Attachment & Interactive Components
         if (buffer.trim()) {
-          if (config.enableHmb) {
-            hmb.pushTurn("assistant", client.user.username, buffer);
+          const { cleanText: finalContent, reactions } = reactionEngine.extractReactionTags(buffer);
+
+          // Apply parsed or autonomous reactions to the user's message
+          for (const rx of reactions) {
+            await reactionEngine.reactToMessage(message, rx);
+          }
+          if (reactions.length === 0) {
+            await reactionEngine.autoReact(message, cleanText);
           }
 
-          const { filesToAttach } = mediaPipeline.extractOutgoingMedia(buffer);
+          if (config.enableHmb) {
+            hmb.pushTurn("assistant", client.user.username, finalContent);
+          }
+
+          const { filesToAttach } = mediaPipeline.extractOutgoingMedia(finalContent);
+          const interactiveComponents = [createInteractiveButtons()];
 
           if (filesToAttach.length > 0) {
-            if (buffer.length <= 2000) {
-              await replyMessage.edit({ content: buffer, files: filesToAttach });
+            if (finalContent.length <= 2000) {
+              await replyMessage.edit({
+                content: finalContent,
+                files: filesToAttach,
+                components: interactiveComponents
+              });
             } else {
-              await replyMessage.edit(buffer.slice(0, 2000));
-              for (let i = 2000; i < buffer.length; i += 2000) {
-                const chunk = buffer.slice(i, i + 2000);
-                const isLast = (i + 2000 >= buffer.length);
-                await message.channel.send({ content: chunk, files: isLast ? filesToAttach : [] });
+              await replyMessage.edit(finalContent.slice(0, 2000));
+              for (let i = 2000; i < finalContent.length; i += 2000) {
+                const chunk = finalContent.slice(i, i + 2000);
+                const isLast = (i + 2000 >= finalContent.length);
+                await message.channel.send({
+                  content: chunk,
+                  files: isLast ? filesToAttach : [],
+                  components: isLast ? interactiveComponents : []
+                });
               }
             }
             await replyMessage.react("🎨").catch(() => {});
           } else {
-            if (buffer.length <= 2000) {
-              await replyMessage.edit(buffer);
+            if (finalContent.length <= 2000) {
+              await replyMessage.edit({
+                content: finalContent,
+                components: interactiveComponents
+              });
             } else {
-              await replyMessage.edit(buffer.slice(0, 2000));
-              for (let i = 2000; i < buffer.length; i += 2000) {
-                await message.channel.send(buffer.slice(i, i + 2000));
+              await replyMessage.edit(finalContent.slice(0, 2000));
+              for (let i = 2000; i < finalContent.length; i += 2000) {
+                const chunk = finalContent.slice(i, i + 2000);
+                const isLast = (i + 2000 >= finalContent.length);
+                await message.channel.send({
+                  content: chunk,
+                  components: isLast ? interactiveComponents : []
+                });
               }
             }
             await replyMessage.react("✨").catch(() => {});

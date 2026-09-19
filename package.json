@@ -7,11 +7,14 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node tests/hmb.test.js && node tests/media.test.js && node tests/actuation.test.js"
+    "test": "node tests/hmb.test.js && node tests/media.test.js && node tests/actuation.test.js && node tests/gateway-features.test.js"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.16.3",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "libsodium-wrappers": "^0.8.4",
+    "opusscript": "^0.0.8"
   },
   "engines": {
     "node": ">=20.0.0"

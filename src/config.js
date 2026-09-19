@@ -53,5 +53,14 @@ export const config = {
   hmbTopK: parseInt(process.env.HMB_TOP_K || "3", 10),
   enableHttpApi: process.env.ENABLE_HTTP_API !== "false",
   httpPort: parseInt(process.env.HTTP_PORT || "18895", 10),
-  httpHost: process.env.HTTP_HOST || "127.0.0.1"
+  httpHost: process.env.HTTP_HOST || "127.0.0.1",
+  ambientChannels: (process.env.AMBIENT_CHANNELS || process.env.ALLOWED_CHANNELS || "1476714141908599046")
+    .split(",")
+    .map(c => c.trim())
+    .filter(Boolean),
+  ambientCooldownMs: parseInt(process.env.AMBIENT_COOLDOWN_MS || "600000", 10), // 10 minutes
+  ambientMinSalience: parseFloat(process.env.AMBIENT_MIN_SALIENCE || "0.40"),
+  enableVoice: process.env.ENABLE_VOICE !== "false",
+  speechBinPath: process.env.SPEECH_HELPER_PATH || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe",
+  enableAutonomousReactions: process.env.ENABLE_AUTONOMOUS_REACTIONS !== "false"
 };

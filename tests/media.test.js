@@ -106,13 +106,16 @@ async function run() {
   });
 
   await itAsync("ffmpeg keyframe and storyboard extraction runs on synthetic media", async () => {
-    // Generate a tiny 1-second synthetic MP4/GIF using ffmpeg testsrc
-    const testVideo = path.resolve(process.cwd(), "data", "test_media_cache", "synthetic_test.mp4");
+    // Generate a tiny 1-second synthetic GIF using ffmpeg testsrc
+    const testVideo = path.resolve(process.cwd(), "data", "test_media_cache", "synthetic_test.gif");
+    if (!fs.existsSync(path.dirname(testVideo))) {
+      fs.mkdirSync(path.dirname(testVideo), { recursive: true });
+    }
     const { execFile } = await import("child_process");
     await new Promise((resolve) => {
       execFile("ffmpeg", [
-        "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=10",
-        "-pix_fmt", "yuv420p", testVideo
+        "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=10",
+        testVideo
       ], () => resolve());
     });
 
@@ -142,7 +145,11 @@ async function run() {
   console.log(`   TEST RESULTS: ${passed}/${total} PASSED (${total - passed} FAILED)`);
   console.log("=======================================================\n");
 
-  if (passed !== total) process.exit(1);
+  if (passed !== total) {
+    process.exit(1);
+  } else {
+    process.exit(0);
+  }
 }
 
 run().catch(err => {
