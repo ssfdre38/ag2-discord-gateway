@@ -9,6 +9,7 @@ import { config } from "./config.js";
 import { AgySessionManager } from "./agy-session.js";
 import { HmbMemoryEngine } from "./hmb-memory.js";
 import { createHttpActuationServer } from "./http-server.js";
+import { getMediaPipeline } from "./media-pipeline.js";
 
 export function createDiscordBot() {
   const client = new Client({
@@ -25,6 +26,7 @@ export function createDiscordBot() {
   const hmb = new HmbMemoryEngine({
     vaultPath: config.hmbVaultPath
   });
+  const mediaPipeline = getMediaPipeline();
   let turnQueue = Promise.resolve();
 
   client.once("ready", () => {
@@ -55,6 +57,7 @@ export function createDiscordBot() {
     console.log(`║  AG2 CLI Path  : ${config.agyPath}`);
     console.log(`║  Bound Session : ${agy.getSessionId() || "Dynamic (Auto-retained)"}`);
     console.log(`║  HMB Memory    : ${config.enableHmb ? `Active (${hmb.getMemoryCount()} anchors in .hmb)` : "Disabled"}`);
+    console.log(`║  Media Pipeline: Active (Images, GIFs, Tenor, ffmpeg keyframes) ║`);
     console.log(`║  Actuation API : ${config.enableHttpApi ? `Active (http://${config.httpHost}:${config.httpPort})` : "Disabled"}`);
     console.log(`║  Admin Users   : ${config.adminUsers.length ? config.adminUsers.join(", ") : "All Users (Open)"}`);
     console.log(`║  Safe Mode     : ${config.safeMode ? "Enabled (Non-admins sandboxed)" : "Disabled"}`);
@@ -229,10 +232,6 @@ export function createDiscordBot() {
       return;
     }
 
-    if (!cleanText && (isMentioned || isReplyToBot)) {
-      cleanText = "Hello!";
-    }
-
     const authorName = message.member?.displayName || message.author.displayName || message.author.username;
 
     // 6. Queue turn execution to prevent concurrent SQLite locks
@@ -241,9 +240,35 @@ export function createDiscordBot() {
         await message.channel.sendTyping();
       } catch {}
 
+      // A. Inbound Media Processing (Images, GIFs, Tenor, Attachments)
+      let inboundMediaRecords = [];
+      try {
+        inboundMediaRecords = await mediaPipeline.processInboundMedia(message);
+      } catch (mediaErr) {
+        console.warn(`[Media Pipeline] Inbound processing warning: ${mediaErr.message}`);
+      }
+
+      const mediaContext = mediaPipeline.formatPromptInjection(inboundMediaRecords);
+
+      let cleanPromptText = cleanText;
+      if (!cleanPromptText.trim()) {
+        if (inboundMediaRecords.length > 0) {
+          cleanPromptText = inboundMediaRecords.some(m => m.kind === "gif")
+            ? "React to and analyze this GIF."
+            : "Inspect and describe this attached image.";
+        } else if (isMentioned || isReplyToBot) {
+          cleanPromptText = "Hello!";
+        } else {
+          return;
+        }
+      }
+
       let replyMessage = null;
       try {
-        replyMessage = await message.reply("*Thinking... ✨*");
+        const placeholder = inboundMediaRecords.length > 0
+          ? "*Inspecting media & thinking... 🎨✨*"
+          : "*Thinking... ✨*";
+        replyMessage = await message.reply(placeholder);
       } catch (err) {
         console.error(`[Discord] Failed to send reply placeholder: ${err.message}`);
         return;
@@ -252,13 +277,17 @@ export function createDiscordBot() {
       let buffer = "";
       let lastEditTime = Date.now();
 
-      let promptToSend = cleanText;
+      let promptToSend = cleanPromptText;
       if (config.enableHmb) {
-        const memoryContext = hmb.buildContextInjection(cleanText, config.hmbTopK);
+        const memoryContext = hmb.buildContextInjection(cleanPromptText, config.hmbTopK);
         if (memoryContext) {
-          promptToSend = `${memoryContext}${cleanText}`;
+          promptToSend = `${memoryContext}${cleanPromptText}`;
         }
-        hmb.pushTurn("user", authorName, cleanText);
+        hmb.pushTurn("user", authorName, cleanPromptText);
+      }
+
+      if (mediaContext) {
+        promptToSend = `${promptToSend}${mediaContext}`;
       }
 
       try {
@@ -275,21 +304,37 @@ export function createDiscordBot() {
           }
         }
 
-        // Final message edit flush
+        // Final message edit flush with Outbound Media Attachment detection
         if (buffer.trim()) {
           if (config.enableHmb) {
             hmb.pushTurn("assistant", client.user.username, buffer);
           }
 
-          if (buffer.length <= 2000) {
-            await replyMessage.edit(buffer);
-          } else {
-            await replyMessage.edit(buffer.slice(0, 2000));
-            for (let i = 2000; i < buffer.length; i += 2000) {
-              await message.channel.send(buffer.slice(i, i + 2000));
+          const { filesToAttach } = mediaPipeline.extractOutgoingMedia(buffer);
+
+          if (filesToAttach.length > 0) {
+            if (buffer.length <= 2000) {
+              await replyMessage.edit({ content: buffer, files: filesToAttach });
+            } else {
+              await replyMessage.edit(buffer.slice(0, 2000));
+              for (let i = 2000; i < buffer.length; i += 2000) {
+                const chunk = buffer.slice(i, i + 2000);
+                const isLast = (i + 2000 >= buffer.length);
+                await message.channel.send({ content: chunk, files: isLast ? filesToAttach : [] });
+              }
             }
+            await replyMessage.react("🎨").catch(() => {});
+          } else {
+            if (buffer.length <= 2000) {
+              await replyMessage.edit(buffer);
+            } else {
+              await replyMessage.edit(buffer.slice(0, 2000));
+              for (let i = 2000; i < buffer.length; i += 2000) {
+                await message.channel.send(buffer.slice(i, i + 2000));
+              }
+            }
+            await replyMessage.react("✨").catch(() => {});
           }
-          await replyMessage.react("✨").catch(() => {});
         } else {
           await replyMessage.edit("*(Done - no text output)*");
         }

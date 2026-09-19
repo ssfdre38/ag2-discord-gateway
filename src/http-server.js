@@ -6,6 +6,8 @@
  */
 
 import http from "http";
+import fs from "fs";
+import { getMediaPipeline } from "./media-pipeline.js";
 
 export function createHttpActuationServer(client, hmb, config) {
   const parseJsonBody = (req) => {
@@ -137,6 +139,28 @@ export function createHttpActuationServer(client, hmb, config) {
         const sendOptions = { content: body.content };
         if (body.replyToId) {
           sendOptions.reply = { messageReference: body.replyToId };
+        }
+
+        const mediaPipeline = getMediaPipeline();
+        const filesToSend = [];
+        if (Array.isArray(body.files)) {
+          for (const f of body.files) {
+            if (typeof f === "string" && fs.existsSync(f)) filesToSend.push(f);
+          }
+        }
+        if (body.filePath && typeof body.filePath === "string" && fs.existsSync(body.filePath)) {
+          filesToSend.push(body.filePath);
+        }
+        if (body.imagePath && typeof body.imagePath === "string" && fs.existsSync(body.imagePath)) {
+          filesToSend.push(body.imagePath);
+        }
+        if (body.imageUrl && typeof body.imageUrl === "string") {
+          const dlPath = await mediaPipeline.downloadMedia(body.imageUrl);
+          if (dlPath) filesToSend.push(dlPath);
+        }
+
+        if (filesToSend.length > 0) {
+          sendOptions.files = filesToSend;
         }
 
         const sent = await channel.send(sendOptions);
