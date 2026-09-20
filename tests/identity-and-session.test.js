@@ -180,6 +180,32 @@ it("routes dedicated Discord threads to threadSessions", () => {
   assert.strictEqual(resolved, "thread-session-abc");
 });
 
+it("normalizes legacy string author inputs safely with non-admin defaults", () => {
+  const agy = new AgySessionManager();
+  const normalized = agy._normalizeAuthor("someuser", false);
+  assert.strictEqual(normalized.id, "unknown_legacy_id");
+  assert.strictEqual(normalized.username, "someuser");
+  assert.strictEqual(normalized.isAdmin, false);
+  assert.strictEqual(normalized.isOwner, false);
+  assert.strictEqual(normalized.isImpersonating, false);
+});
+
+it("handles session unbinding/resetting cleanly across admin, thread, and user contexts", () => {
+  const agy = new AgySessionManager();
+  const user = { id: "user-reset-test", username: "tester", isAdmin: false };
+  const thread = { isThread: true, threadId: "thread-reset-test" };
+
+  agy.bindSession("sess-u", user);
+  agy.bindSession("sess-t", thread);
+  assert.strictEqual(agy.resolveSessionId(user), "sess-u");
+  assert.strictEqual(agy.resolveSessionId(null, thread), "sess-t");
+
+  agy.resetSession(user);
+  agy.resetSession(thread);
+  assert.strictEqual(agy.resolveSessionId(user), null);
+  assert.strictEqual(agy.resolveSessionId(null, thread), null);
+});
+
 console.log("\n=======================================================");
 console.log(`   TEST RESULTS: ${passed}/${total} PASSED (${total - passed} FAILED)`);
 console.log("=======================================================\n");

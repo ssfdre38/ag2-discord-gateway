@@ -233,7 +233,7 @@ export async function handleInteraction(interaction, ctx) {
 
         const replyText = buffer.length > 2000 ? buffer.slice(0, 1995) + "..." : buffer;
         await interaction.editReply({
-          content: replyText || "*(Done - no text output)*",
+          content: replyText || "✅ **Done!** Detailed explanation complete.",
           components: [createInteractiveButtons()]
         });
         return;
@@ -473,7 +473,7 @@ export async function handleInteraction(interaction, ctx) {
             const chunks = splitDiscordMessage(finalClean, maxChunkLength);
 
             if (chunks.length === 0) {
-              await threadPlaceholder.edit("*(Done - no text output)*");
+              await threadPlaceholder.edit("✅ **Done!** Thread task completed successfully.");
             } else {
               const firstChunk = chunks[0];
               const hasMultipleChunks = chunks.length > 1;
@@ -503,7 +503,7 @@ export async function handleInteraction(interaction, ctx) {
               }
             }
           } else {
-            await threadPlaceholder.edit("*(Done - no text output)*");
+            await threadPlaceholder.edit("✅ **Done!** Thread task completed successfully.");
           }
         } catch (taskErr) {
           await threadPlaceholder.edit(`⚠️ **[AG2 Execution Error]**: ${taskErr.message}`);

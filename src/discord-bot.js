@@ -557,7 +557,7 @@ export function createDiscordBot() {
           const chunks = splitDiscordMessage(finalClean, maxChunkLength);
 
           if (chunks.length === 0) {
-            await replyMessage.edit("*(Done - no text output)*");
+            await replyMessage.edit("✅ **Done!** Task completed successfully.");
           } else {
             const firstChunk = chunks[0];
             const hasMultipleChunks = chunks.length > 1;
@@ -589,7 +589,7 @@ export function createDiscordBot() {
             }
           }
         } else {
-          await replyMessage.edit("*(Done - no text output)*");
+          await replyMessage.edit("✅ **Done!** Task completed successfully.");
         }
       } catch (err) {
         console.error(`[AG2 Gateway Error] ${err.message}`);

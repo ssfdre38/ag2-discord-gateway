@@ -222,7 +222,7 @@ export class AgySessionManager {
     const args = [
       "--print", guardedPrompt,
       "--output-format", "stream-json",
-      "--print-timeout", "90s"
+      "--print-timeout", "300s"
     ];
 
     if (sessionId) {
@@ -252,20 +252,42 @@ export class AgySessionManager {
 
     let hasYieldedAny = false;
     let fullResponse = "";
+    const executedTools = [];
 
-    // Watchdog timer to ensure child process NEVER hangs or starves the turn queue
-    const turnTimeout = setTimeout(() => {
-      console.warn(`[AG2 Session] Turn timed out after 95s, terminating child process (PID: ${child.pid})...`);
+    // Activity-based watchdog: resets on ANY output (stdout/stderr) from child process
+    // An agent performing multi-step coding, file writes, or compilation remains alive as long as it's active.
+    const INACTIVITY_TIMEOUT_MS = 120000; // 120s of complete silence
+    const MAX_WALL_CLOCK_TIMEOUT_MS = 600000; // 10 minutes maximum wall-clock ceiling
+
+    let inactivityTimer = null;
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        console.warn(`[AG2 Session] Turn inactive for ${INACTIVITY_TIMEOUT_MS / 1000}s with no output, terminating child process (PID: ${child.pid})...`);
+        try { child.kill("SIGKILL"); } catch {}
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    const maxWallClockTimer = setTimeout(() => {
+      console.warn(`[AG2 Session] Turn reached maximum wall-clock ceiling of ${MAX_WALL_CLOCK_TIMEOUT_MS / 1000}s, terminating child process (PID: ${child.pid})...`);
       try { child.kill("SIGKILL"); } catch {}
-    }, 95000);
+    }, MAX_WALL_CLOCK_TIMEOUT_MS);
+
+    resetInactivityTimer();
 
     child.stderr.on("data", (chunk) => {
+      resetInactivityTimer();
       const errText = chunk.toString().trim();
       if (errText) console.warn(`[AG2 CLI stderr] ${errText}`);
     });
 
+    child.on("error", (err) => {
+      console.error(`[AG2 CLI error] Spawn error: ${err.message}`);
+    });
+
     try {
       for await (const line of rl) {
+        resetInactivityTimer();
         if (!line.trim()) continue;
 
         try {
@@ -287,6 +309,13 @@ export class AgySessionManager {
 
           if (event.event === "step_update" && event.step_update) {
             const update = event.step_update;
+
+            // Track tool executions for transparent reporting
+            const toolName = update.tool_name || update.tool_call?.name || update.call?.name || update.name;
+            if (toolName) {
+              executedTools.push(toolName);
+            }
+
             if (update.step_type === "agent_response" && update.text_delta) {
               hasYieldedAny = true;
               fullResponse += update.text_delta;
@@ -297,6 +326,8 @@ export class AgySessionManager {
           if (event.event === "result" && event.result) {
             const finalResp = event.result.response || "";
             if (!hasYieldedAny && finalResp) {
+              hasYieldedAny = true;
+              fullResponse += finalResp;
               yield finalResp;
             }
           }
@@ -304,8 +335,21 @@ export class AgySessionManager {
           // Ignore non-JSON log lines
         }
       }
+
+      // If the model completed tasks via tools but did not produce text tokens,
+      // yield a clear completion report instead of returning silence.
+      if (!hasYieldedAny) {
+        if (executedTools.length > 0) {
+          const uniqueTools = [...new Set(executedTools)];
+          const toolSummary = `✅ **Task Completed**: Actions executed: \`${uniqueTools.join("`, `")}\`.`;
+          yield toolSummary;
+        } else {
+          yield "✅ **Task Completed**.";
+        }
+      }
     } finally {
-      clearTimeout(turnTimeout);
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      if (maxWallClockTimer) clearTimeout(maxWallClockTimer);
       try { child.kill(); } catch {}
     }
   }

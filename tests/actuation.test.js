@@ -219,9 +219,8 @@ server.listen(TEST_PORT, "127.0.0.1", async () => {
     console.error("❌ Test Failed:", err);
     process.exit(1);
   } finally {
-    if (typeof server.closeAllConnections === "function") {
-      server.closeAllConnections();
-    }
     server.close();
   }
 });
+
+

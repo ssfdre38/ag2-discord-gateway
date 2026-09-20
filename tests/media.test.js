@@ -153,7 +153,7 @@ async function run() {
       execFile("ffmpeg", [
         "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=10",
         testVideo
-      ], () => resolve());
+      ], { timeout: 5000, windowsHide: true }, () => resolve());
     });
 
     if (fs.existsSync(testVideo)) {
