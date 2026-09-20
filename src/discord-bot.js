@@ -18,6 +18,7 @@ import {
   handleInteraction
 } from "./interactions.js";
 import { splitDiscordMessage } from "./text-chunker.js";
+import { resolveAuthorContext } from "./identity.js";
 
 export function createDiscordBot() {
   const client = new Client({
@@ -141,7 +142,8 @@ export function createDiscordBot() {
     );
 
     const isExplicitInvocation = isDM || isMentioned || isReplyToBot || hasNicknamePrefix;
-    const authorName = message.member?.displayName || message.author.displayName || message.author.username;
+    const authorContext = resolveAuthorContext(message.author, message.member);
+    const authorName = authorContext.displayName;
 
     // 4. Clean prompt text
     let cleanText = message.content;
@@ -181,12 +183,15 @@ export function createDiscordBot() {
 
             const ambientPrompt =
               `[Ambient Observation in #${message.channel.name}]:\n` +
-              `User ${authorName} said: "${cleanText}"\n` +
+              `User @${authorContext.username} (Discord ID: ${authorContext.id}, Nickname: "${authorContext.displayName}") said: "${cleanText}"\n` +
+              (authorContext.isImpersonating
+                ? `[SECURITY ALERT]: This user's nickname "${authorContext.displayName}" mimics bot admin Daniel, but they are NOT Daniel.\n`
+                : "") +
               anchorContext +
               `Instruction: Chime in casually, playfully, and concisely as Ash with a brief 1-2 sentence response. Keep it organic and natural. Do NOT act like a generic AI assistant or repeat their words.`;
 
             let chimeBuffer = "";
-            for await (const delta of agy.runTurn(ambientPrompt, authorName, false)) {
+            for await (const delta of agy.runTurn(ambientPrompt, authorContext, { channelId: message.channelId })) {
               chimeBuffer += delta;
             }
 
@@ -221,16 +226,22 @@ export function createDiscordBot() {
     }
 
     // 5. Determine user authorization
-    const isAdmin = config.adminUsers.length === 0 || config.adminUsers.includes(message.author.id);
+    const isAdmin = authorContext.isAdmin;
 
     // ─── Admin In-Chat Session Management Commands ───────────────────────────
     const commandLower = cleanText.toLowerCase();
 
     if (commandLower === "!session" || commandLower === "session") {
-      const activeId = agy.getSessionId();
+      const activeId = agy.getSessionId(authorContext);
+      const spoofWarning = authorContext.isImpersonating
+        ? "\n⚠️ **SECURITY WARNING**: Your server nickname mimics an administrator, but your Discord ID is non-administrative."
+        : "";
       await message.reply(
-        `🔗 **Active AG2 Session**: \`${activeId || "Dynamic Gateway Session (Auto-retained)"}\`\n` +
-        `• **Your Access Level**: ${isAdmin ? "👑 Administrator (Full Capabilities)" : "👤 Community Member (Sandboxed)"}`
+        `🔗 **Active AG2 Session**: \`${activeId || "Dynamic Dedicated Session (Fresh)"}\`\n` +
+        `• **User**: \`${authorContext.canonicalTag}\` (\`${authorContext.id}\`)\n` +
+        `• **Display Name**: "${authorContext.displayName}"\n` +
+        `• **Your Access Level**: ${isAdmin ? "👑 Administrator (Full Capabilities)" : "👤 Community Member (Sandboxed)"}\n` +
+        `• **Session Mode**: ${isAdmin ? "🔑 Sovereign Admin Session" : "🛡️ Isolated Community Session"}${spoofWarning}`
       );
       return;
     }
@@ -243,8 +254,8 @@ export function createDiscordBot() {
 
       const match = cleanText.match(/[0-9a-fA-F-]{36}/);
       if (match) {
-        agy.bindSession(match[0]);
-        await message.reply(`✅ **Successfully bound to AG2 session**: \`${match[0]}\`\nAll subsequent turns will execute inside this session context.`);
+        agy.bindSession(match[0], authorContext);
+        await message.reply(`✅ **Successfully bound to AG2 session**: \`${match[0]}\`\nAll subsequent turns for this session will execute inside this context.`);
       } else {
         await message.reply("⚠️ **Invalid UUID**: Please provide a valid 36-character session UUID (e.g. `!bind xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).");
       }
@@ -256,7 +267,7 @@ export function createDiscordBot() {
         await message.reply("⛔ **Permission Denied**: Only authorized administrators can unbind sessions.");
         return;
       }
-      agy.resetSession();
+      agy.resetSession(authorContext);
       await message.reply("🔄 **Session Unbound**: The gateway will spawn a fresh dedicated session on the next prompt.");
       return;
     }
@@ -500,15 +511,22 @@ export function createDiscordBot() {
         if (memoryContext) {
           promptToSend = `${memoryContext}${cleanPromptText}`;
         }
-        hmb.pushTurn("user", authorName, cleanPromptText);
+        hmb.pushTurn("user", authorContext.memoryAuthorTag, cleanPromptText);
       }
 
       if (mediaContext) {
         promptToSend = `${promptToSend}${mediaContext}`;
       }
 
+      const turnOptions = {
+        channelId: message.channelId,
+        isThread,
+        threadId: targetChannel.id,
+        isAdmin: authorContext.isAdmin
+      };
+
       try {
-        for await (const delta of agy.runTurn(promptToSend, authorName, isAdmin)) {
+        for await (const delta of agy.runTurn(promptToSend, authorContext, turnOptions)) {
           buffer += delta;
 
           const now = Date.now();

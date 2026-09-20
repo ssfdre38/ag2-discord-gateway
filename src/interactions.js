@@ -14,6 +14,7 @@ import {
   ChannelType
 } from "discord.js";
 import { splitDiscordMessage } from "./text-chunker.js";
+import { resolveAuthorContext } from "./identity.js";
 
 /**
  * Builds standard action row buttons attached to Ash's replies.
@@ -171,6 +172,7 @@ export async function registerSlashCommands(client) {
  */
 export async function handleInteraction(interaction, ctx) {
   const { agy, hmb, voiceManager, client, config } = ctx;
+  const authorContext = resolveAuthorContext(interaction.user, interaction.member);
 
   try {
     // ══════════════════════════════════════════════════════════════════════
@@ -181,6 +183,14 @@ export async function handleInteraction(interaction, ctx) {
 
       // 1. [🧠 Save to Vault]
       if (customId === "btn_save_vault") {
+        if (!authorContext.isAdmin) {
+          await interaction.reply({
+            content: "⛔ **Permission Denied**: Only administrators can commit anchors to the HMB vault.",
+            ephemeral: true
+          });
+          return;
+        }
+
         const rawContent = interaction.message.content || "";
         const cleanContent = rawContent.replace(/\[REACT:[^\]]+\]/gi, "").trim();
 
@@ -217,7 +227,7 @@ export async function handleInteraction(interaction, ctx) {
         const prompt = `[Follow-Up Request]: Please explain more in-depth and provide greater detail regarding your previous response: "${previousContent}". Keep your tone authentic and engaging.`;
 
         let buffer = "";
-        for await (const delta of agy.runTurn(prompt, interaction.user.username, false)) {
+        for await (const delta of agy.runTurn(prompt, authorContext, { channelId: interaction.channelId })) {
           buffer += delta;
         }
 
@@ -262,12 +272,15 @@ export async function handleInteraction(interaction, ctx) {
         const voiceStatus = voiceManager && interaction.guildId ? voiceManager.getStatus(interaction.guildId) : null;
         const mem = process.memoryUsage();
         const rssMb = (mem.rss / 1024 / 1024).toFixed(1);
+        const activeSession = agy.getSessionId(authorContext);
 
         await interaction.reply({
           content:
             `⚡ **AG2 Discord Gateway Status & Vitals**:\n` +
             `• **Identity**: \`${client.user.tag}\` (${client.user.id})\n` +
-            `• **AG2 Session**: \`${agy.getSessionId() || "Dynamic (Auto-retained)"}\`\n` +
+            `• **User**: \`${authorContext.canonicalTag}\` (\`${authorContext.id}\`)${authorContext.isImpersonating ? " ⚠️ *(Spoof Detected)*" : ""}\n` +
+            `• **AG2 Session**: \`${activeSession || "Dynamic (Auto-retained)"}\`\n` +
+            `• **Access Level**: ${authorContext.isAdmin ? "👑 Administrator" : "👤 Community Member"}\n` +
             `• **Memory Bank**: \`${hmb.getMemoryCount()}\` anchors in 64-bit binary vault\n` +
             `• **Voice WebRTC**: ${voiceStatus?.connected ? `Connected 🟢` : "Idle / Disconnected ⚪"}\n` +
             `• **System Load**: RSS \`${rssMb} MB\` | Uptime \`${(process.uptime() / 60).toFixed(1)}m\``,
@@ -318,6 +331,14 @@ export async function handleInteraction(interaction, ctx) {
         }
 
         if (sub === "remember") {
+          if (!authorContext.isAdmin) {
+            await interaction.reply({
+              content: "⛔ **Permission Denied**: Only administrators can commit memory anchors to the HMB vault.",
+              ephemeral: true
+            });
+            return;
+          }
+
           const concept = interaction.options.getString("concept");
           const content = interaction.options.getString("content");
 
@@ -404,7 +425,7 @@ export async function handleInteraction(interaction, ctx) {
 
         await interaction.deferReply();
         const taskPrompt = interaction.options.getString("task");
-        const authorName = interaction.member?.displayName || interaction.user.username;
+        const authorName = authorContext.displayName;
 
         let thread;
         try {
@@ -426,7 +447,7 @@ export async function handleInteraction(interaction, ctx) {
         let lastEditTime = Date.now();
 
         try {
-          for await (const delta of agy.runTurn(taskPrompt, authorName, true)) {
+          for await (const delta of agy.runTurn(taskPrompt, authorContext, { isThread: true, threadId: thread.id })) {
             buffer += delta;
             const now = Date.now();
             if (now - lastEditTime >= (config.throttleMs || 400)) {

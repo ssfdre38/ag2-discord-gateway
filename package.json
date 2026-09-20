@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node tests/hmb.test.js && node tests/media.test.js && node tests/actuation.test.js && node tests/gateway-features.test.js && node tests/text-chunker.test.js"
+    "test": "node tests/hmb.test.js && node tests/media.test.js && node tests/actuation.test.js && node tests/gateway-features.test.js && node tests/text-chunker.test.js && node tests/identity-and-session.test.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
