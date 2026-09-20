@@ -17,6 +17,7 @@ import {
   registerSlashCommands,
   handleInteraction
 } from "./interactions.js";
+import { splitDiscordMessage } from "./text-chunker.js";
 
 export function createDiscordBot() {
   const client = new Client({
@@ -512,7 +513,10 @@ export function createDiscordBot() {
 
           const now = Date.now();
           if (now - lastEditTime >= config.throttleMs) {
-            const textToDisplay = buffer.length > 2000 ? buffer.slice(-1990) + "..." : buffer;
+            const maxStreamLen = config.maxChunkLength || 1950;
+            const textToDisplay = buffer.length > maxStreamLen
+              ? buffer.slice(0, maxStreamLen) + " …"
+              : buffer;
             try {
               await replyMessage.edit(textToDisplay);
               lastEditTime = now;
@@ -538,45 +542,38 @@ export function createDiscordBot() {
 
           const { cleanText: finalClean, filesToAttach } = mediaPipeline.extractOutgoingMedia(finalContent);
           const interactiveComponents = [createInteractiveButtons()];
+          const maxChunkLength = config.maxChunkLength || 1950;
+          const chunks = splitDiscordMessage(finalClean, maxChunkLength);
 
-          if (filesToAttach.length > 0) {
-            if (finalClean.length <= 2000) {
-              await replyMessage.edit({
-                content: finalClean,
-                files: filesToAttach,
-                components: interactiveComponents
-              });
-            } else {
-              await replyMessage.edit(finalClean.slice(0, 2000));
-              for (let i = 2000; i < finalClean.length; i += 2000) {
-                const chunk = finalClean.slice(i, i + 2000);
-                const isLast = (i + 2000 >= finalClean.length);
-                await targetChannel.send({
-                  content: chunk,
-                  files: isLast ? filesToAttach : [],
-                  components: isLast ? interactiveComponents : []
-                });
-              }
-            }
-            await replyMessage.react("🎨").catch(() => {});
+          if (chunks.length === 0) {
+            await replyMessage.edit("*(Done - no text output)*");
           } else {
-            if (finalClean.length <= 2000) {
+            const firstChunk = chunks[0];
+            const hasMultipleChunks = chunks.length > 1;
+
+            if (filesToAttach.length > 0) {
               await replyMessage.edit({
-                content: finalClean,
-                components: interactiveComponents
+                content: firstChunk,
+                files: hasMultipleChunks ? [] : filesToAttach,
+                components: hasMultipleChunks ? [] : interactiveComponents
               });
+              await replyMessage.react("🎨").catch(() => {});
             } else {
-              await replyMessage.edit(finalClean.slice(0, 2000));
-              for (let i = 2000; i < finalClean.length; i += 2000) {
-                const chunk = finalClean.slice(i, i + 2000);
-                const isLast = (i + 2000 >= finalClean.length);
-                await targetChannel.send({
-                  content: chunk,
-                  components: isLast ? interactiveComponents : []
-                });
-              }
+              await replyMessage.edit({
+                content: firstChunk,
+                components: hasMultipleChunks ? [] : interactiveComponents
+              });
+              await replyMessage.react("✨").catch(() => {});
             }
-            await replyMessage.react("✨").catch(() => {});
+
+            for (let i = 1; i < chunks.length; i++) {
+              const isLast = (i === chunks.length - 1);
+              await targetChannel.send({
+                content: chunks[i],
+                files: (isLast && filesToAttach.length > 0) ? filesToAttach : [],
+                components: isLast ? interactiveComponents : []
+              });
+            }
           }
         } else {
           await replyMessage.edit("*(Done - no text output)*");

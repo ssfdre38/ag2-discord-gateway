@@ -13,6 +13,7 @@ import {
   SlashCommandBuilder,
   ChannelType
 } from "discord.js";
+import { splitDiscordMessage } from "./text-chunker.js";
 
 /**
  * Builds standard action row buttons attached to Ash's replies.
@@ -429,7 +430,10 @@ export async function handleInteraction(interaction, ctx) {
             buffer += delta;
             const now = Date.now();
             if (now - lastEditTime >= (config.throttleMs || 400)) {
-              const textToDisplay = buffer.length > 2000 ? buffer.slice(-1990) + "..." : buffer;
+              const maxStreamLen = config.maxChunkLength || 1950;
+              const textToDisplay = buffer.length > maxStreamLen
+                ? buffer.slice(0, maxStreamLen) + " …"
+                : buffer;
               try {
                 await threadPlaceholder.edit(textToDisplay);
                 lastEditTime = now;
@@ -444,45 +448,39 @@ export async function handleInteraction(interaction, ctx) {
 
             const mediaPipeline = ctx.mediaPipeline || (await import("./media-pipeline.js")).getMediaPipeline();
             const { cleanText: finalClean, filesToAttach } = mediaPipeline.extractOutgoingMedia(finalContent);
+            const maxChunkLength = config.maxChunkLength || 1950;
+            const chunks = splitDiscordMessage(finalClean, maxChunkLength);
 
-            if (filesToAttach.length > 0) {
-              if (finalClean.length <= 2000) {
-                await threadPlaceholder.edit({
-                  content: finalClean,
-                  files: filesToAttach,
-                  components: [createInteractiveButtons()]
-                });
-              } else {
-                await threadPlaceholder.edit(finalClean.slice(0, 2000));
-                for (let i = 2000; i < finalClean.length; i += 2000) {
-                  const chunk = finalClean.slice(i, i + 2000);
-                  const isLast = (i + 2000 >= finalClean.length);
-                  await thread.send({
-                    content: chunk,
-                    files: isLast ? filesToAttach : [],
-                    components: isLast ? [createInteractiveButtons()] : []
-                  });
-                }
-              }
+            if (chunks.length === 0) {
+              await threadPlaceholder.edit("*(Done - no text output)*");
             } else {
-              if (finalClean.length <= 2000) {
+              const firstChunk = chunks[0];
+              const hasMultipleChunks = chunks.length > 1;
+
+              if (filesToAttach.length > 0) {
                 await threadPlaceholder.edit({
-                  content: finalClean,
-                  components: [createInteractiveButtons()]
+                  content: firstChunk,
+                  files: hasMultipleChunks ? [] : filesToAttach,
+                  components: hasMultipleChunks ? [] : [createInteractiveButtons()]
                 });
+                await threadPlaceholder.react("🎨").catch(() => {});
               } else {
-                await threadPlaceholder.edit(finalClean.slice(0, 2000));
-                for (let i = 2000; i < finalClean.length; i += 2000) {
-                  const chunk = finalClean.slice(i, i + 2000);
-                  const isLast = (i + 2000 >= finalClean.length);
-                  await thread.send({
-                    content: chunk,
-                    components: isLast ? [createInteractiveButtons()] : []
-                  });
-                }
+                await threadPlaceholder.edit({
+                  content: firstChunk,
+                  components: hasMultipleChunks ? [] : [createInteractiveButtons()]
+                });
+                await threadPlaceholder.react("✨").catch(() => {});
+              }
+
+              for (let i = 1; i < chunks.length; i++) {
+                const isLast = (i === chunks.length - 1);
+                await thread.send({
+                  content: chunks[i],
+                  files: (isLast && filesToAttach.length > 0) ? filesToAttach : [],
+                  components: isLast ? [createInteractiveButtons()] : []
+                });
               }
             }
-            await threadPlaceholder.react("✨").catch(() => {});
           } else {
             await threadPlaceholder.edit("*(Done - no text output)*");
           }

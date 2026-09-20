@@ -65,5 +65,7 @@ export const config = {
   enableAutonomousReactions: process.env.ENABLE_AUTONOMOUS_REACTIONS !== "false",
   enableAutoThreads: process.env.ENABLE_AUTO_THREADS !== "false",
   artifactDir: process.env.ARTIFACT_DIR || path.join(process.cwd(), "data", "artifacts"),
-  maxInlineCodeLines: parseInt(process.env.MAX_INLINE_CODE_LINES || "25", 10)
+  maxInlineCodeLines: parseInt(process.env.MAX_INLINE_CODE_LINES || "25", 10),
+  maxChunkLength: parseInt(process.env.MAX_CHUNK_LENGTH || "1950", 10),
+  enableDiscordGuidelines: process.env.ENABLE_DISCORD_GUIDELINES !== "false"
 };

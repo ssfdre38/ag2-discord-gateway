@@ -39,6 +39,17 @@ export class AgySessionManager {
       promptParts.push(`[SYSTEM PERSONA]: ${config.systemPrompt}`);
     }
 
+    if (config.enableDiscordGuidelines) {
+      promptParts.push(
+        `[DISCORD CONVERSATIONAL GUIDELINES]:\n` +
+        `• Discord Context: You are chatting live in Discord (#ash-chat). Keep responses organic, punchy, and conversational.\n` +
+        `• Message Length & Fitting: Discord messages have a strict 2000-character limit. Keep standard conversational answers concise and complete within 1 to 3 natural paragraphs (aiming under 1,200 characters) so they fit comfortably in a single message block without overflowing into multiple text blocks.\n` +
+        `• Avoid Document Bloat: Do NOT structure casual chat answers like an academic paper or manual. Avoid unnecessary section headers (e.g. "### 1.", "### 2."), divider lines ("---"), or nested lists for simple questions unless the user explicitly requests an exhaustive breakdown.\n` +
+        `• Technical Depth: Answer technical questions with precision, depth, and clarity without lecturing.\n` +
+        `• Code Delivery: If writing code, provide clean snippets. Large code blocks (>25 lines) will automatically be packaged into downloadable files by the gateway.`
+      );
+    }
+
     if (!isAdmin) {
       promptParts.push(
         `[SECURITY POLICY]: User "${authorName}" is a standard Discord community member (Non-Admin). ` +
