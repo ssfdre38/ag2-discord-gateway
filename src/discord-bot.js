@@ -485,9 +485,9 @@ export function createDiscordBot() {
         }
       }
 
+      const isThread = Boolean(targetChannel.isThread?.() || targetChannel.id !== message.channelId);
       let replyMessage = null;
       try {
-        const isThread = targetChannel.isThread?.() || targetChannel.id !== message.channelId;
         const placeholder = inboundMediaRecords.length > 0
           ? "*Inspecting media & thinking... 🎨✨*"
           : isThread
@@ -505,27 +505,27 @@ export function createDiscordBot() {
       let buffer = "";
       let lastEditTime = Date.now();
 
-      let promptToSend = cleanPromptText;
-      if (config.enableHmb) {
-        const memoryContext = hmb.buildContextInjection(cleanPromptText, config.hmbTopK);
-        if (memoryContext) {
-          promptToSend = `${memoryContext}${cleanPromptText}`;
-        }
-        hmb.pushTurn("user", authorContext.memoryAuthorTag, cleanPromptText);
-      }
-
-      if (mediaContext) {
-        promptToSend = `${promptToSend}${mediaContext}`;
-      }
-
-      const turnOptions = {
-        channelId: message.channelId,
-        isThread,
-        threadId: targetChannel.id,
-        isAdmin: authorContext.isAdmin
-      };
-
       try {
+        let promptToSend = cleanPromptText;
+        if (config.enableHmb) {
+          const memoryContext = hmb.buildContextInjection(cleanPromptText, config.hmbTopK);
+          if (memoryContext) {
+            promptToSend = `${memoryContext}${cleanPromptText}`;
+          }
+          hmb.pushTurn("user", authorContext.memoryAuthorTag, cleanPromptText);
+        }
+
+        if (mediaContext) {
+          promptToSend = `${promptToSend}${mediaContext}`;
+        }
+
+        const turnOptions = {
+          channelId: message.channelId,
+          isThread,
+          threadId: targetChannel.id,
+          isAdmin: authorContext.isAdmin
+        };
+
         for await (const delta of agy.runTurn(promptToSend, authorContext, turnOptions)) {
           buffer += delta;
 
