@@ -88,6 +88,28 @@ it("catches Shane impersonating Daniel via server nickname and flags security al
   assert.strictEqual(ctx.memoryAuthorTag, "@shane#987654321098765432"); // Never pollutes memory with 'Daniel'
 });
 
+it("recognizes Chris as an authorized project collaborator for BarrerAvatarStudio", () => {
+  const chrisUser = {
+    id: "1227226205544255498",
+    username: "driver_2_gamer",
+    displayName: "driver_2_gamer"
+  };
+  const chrisMember = {
+    displayName: "Chris"
+  };
+
+  const ctx = resolveAuthorContext(chrisUser, chrisMember);
+
+  assert.strictEqual(ctx.id, "1227226205544255498");
+  assert.strictEqual(ctx.username, "driver_2_gamer");
+  assert.strictEqual(ctx.displayName, "Chris");
+  assert.strictEqual(ctx.isAdmin, false);
+  assert.strictEqual(ctx.isOwner, false);
+  assert.strictEqual(ctx.isImpersonating, false);
+  assert.strictEqual(ctx.isCollaborator, true);
+  assert.deepStrictEqual(ctx.collaboratorProjects, ["BarrerAvatarStudio"]);
+});
+
 it("catches sneaky nickname variations (case insensitive, brackets, ssfdre)", () => {
   const badActor = { id: "123456", username: "troll" };
 

@@ -134,12 +134,9 @@ export function createDiscordBot() {
       } catch {}
     }
 
-    const contentLower = message.content.trim().toLowerCase();
-    const hasNicknamePrefix = config.nicknames.some(nick =>
-      contentLower.startsWith(`${nick} `) ||
-      contentLower.startsWith(`${nick},`) ||
-      contentLower.startsWith(`${nick}:`)
-    );
+    const nickPattern = config.nicknames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const nickPrefixRegex = new RegExp(`^(${nickPattern})[,:\\s?!.-]+`, "i");
+    const hasNicknamePrefix = nickPrefixRegex.test(message.content.trim());
 
     const isExplicitInvocation = isDM || isMentioned || isReplyToBot || hasNicknamePrefix;
     const authorContext = resolveAuthorContext(message.author, message.member);
@@ -148,11 +145,7 @@ export function createDiscordBot() {
     // 4. Clean prompt text
     let cleanText = message.content;
     cleanText = cleanText.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
-
-    for (const nick of config.nicknames) {
-      const nickRegex = new RegExp(`^${nick}[,:\\s]+`, "i");
-      cleanText = cleanText.replace(nickRegex, "").trim();
-    }
+    cleanText = cleanText.replace(nickPrefixRegex, "").trim();
 
     // ─── Proactive Ambient Listener ("Ash Chimes In") ────────────────────────
     const isAmbientChannel = !isDM && config.ambientChannels.includes(message.channelId);
@@ -453,7 +446,7 @@ export function createDiscordBot() {
           cleanPromptText = inboundMediaRecords.some(m => m.kind === "gif")
             ? "React to and analyze this GIF."
             : "Inspect and describe this attached image.";
-        } else if (isMentioned || isReplyToBot) {
+        } else if (isMentioned || isReplyToBot || hasNicknamePrefix) {
           cleanPromptText = "Hello!";
         } else {
           return;
