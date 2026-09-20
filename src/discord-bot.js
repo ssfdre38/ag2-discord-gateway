@@ -550,17 +550,18 @@ export function createDiscordBot() {
           } else {
             const firstChunk = chunks[0];
             const hasMultipleChunks = chunks.length > 1;
+            const firstContent = hasMultipleChunks ? `${firstChunk}\n\n*(Part 1/${chunks.length})*` : firstChunk;
 
             if (filesToAttach.length > 0) {
               await replyMessage.edit({
-                content: firstChunk,
+                content: firstContent,
                 files: hasMultipleChunks ? [] : filesToAttach,
                 components: hasMultipleChunks ? [] : interactiveComponents
               });
               await replyMessage.react("🎨").catch(() => {});
             } else {
               await replyMessage.edit({
-                content: firstChunk,
+                content: firstContent,
                 components: hasMultipleChunks ? [] : interactiveComponents
               });
               await replyMessage.react("✨").catch(() => {});
@@ -568,8 +569,9 @@ export function createDiscordBot() {
 
             for (let i = 1; i < chunks.length; i++) {
               const isLast = (i === chunks.length - 1);
+              const chunkContent = `${chunks[i]}\n\n*(Part ${i + 1}/${chunks.length})*`;
               await targetChannel.send({
-                content: chunks[i],
+                content: chunkContent,
                 files: (isLast && filesToAttach.length > 0) ? filesToAttach : [],
                 components: isLast ? interactiveComponents : []
               });

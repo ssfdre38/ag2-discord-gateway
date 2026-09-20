@@ -37,14 +37,14 @@ export function splitDiscordMessage(text, maxLength = 1950) {
     const candidate = remaining.slice(0, maxLength);
     let splitIndex = -1;
 
-    // 1. Try paragraph break (\n\n)
+    // 1. Try paragraph break (\n\n) - prefer splitting near the end of the chunk budget
     const lastParagraph = candidate.lastIndexOf("\n\n");
-    if (lastParagraph > maxLength * 0.35) {
+    if (lastParagraph > maxLength * 0.60) {
       splitIndex = lastParagraph;
     } else {
       // 2. Try single newline (\n)
       const lastNewline = candidate.lastIndexOf("\n");
-      if (lastNewline > maxLength * 0.35) {
+      if (lastNewline > maxLength * 0.65) {
         splitIndex = lastNewline;
       } else {
         // 3. Try sentence boundary (. , ! , ? followed by space or newline)
@@ -52,7 +52,7 @@ export function splitDiscordMessage(text, maxLength = 1950) {
         const sentenceRegex = /[.!?](\s+|$)/g;
         let match;
         while ((match = sentenceRegex.exec(candidate)) !== null) {
-          if (match.index > maxLength * 0.35) {
+          if (match.index > maxLength * 0.55) {
             lastSentenceEnd = match.index + 1; // include the punctuation
           }
         }
@@ -61,7 +61,7 @@ export function splitDiscordMessage(text, maxLength = 1950) {
         } else {
           // 4. Try word boundary (space)
           const lastSpace = candidate.lastIndexOf(" ");
-          if (lastSpace > maxLength * 0.3) {
+          if (lastSpace > maxLength * 0.50) {
             splitIndex = lastSpace;
           } else {
             // Hard cut if no whitespace in range

@@ -42,11 +42,11 @@ export class AgySessionManager {
     if (config.enableDiscordGuidelines) {
       promptParts.push(
         `[DISCORD CONVERSATIONAL GUIDELINES]:\n` +
-        `• Discord Context: You are chatting live in Discord (#ash-chat). Keep responses organic, punchy, and conversational.\n` +
-        `• Message Length & Fitting: Discord messages have a strict 2000-character limit. Keep standard conversational answers concise and complete within 1 to 3 natural paragraphs (aiming under 1,200 characters) so they fit comfortably in a single message block without overflowing into multiple text blocks.\n` +
-        `• Avoid Document Bloat: Do NOT structure casual chat answers like an academic paper or manual. Avoid unnecessary section headers (e.g. "### 1.", "### 2."), divider lines ("---"), or nested lists for simple questions unless the user explicitly requests an exhaustive breakdown.\n` +
-        `• Technical Depth: Answer technical questions with precision, depth, and clarity without lecturing.\n` +
-        `• Code Delivery: If writing code, provide clean snippets. Large code blocks (>25 lines) will automatically be packaged into downloadable files by the gateway.`
+        `• Discord Context: You are chatting live in Discord (#ash-chat). Keep responses organic, punchy, conversational, and direct.\n` +
+        `• Single Message Target: Discord messages have a 2,000 character limit. Keep standard chat responses concise and complete within 1 to 3 natural paragraphs (aiming under 1,200 characters / ~250 words) so they fit comfortably inside a single message block without spilling into multiple messages.\n` +
+        `• Avoid Over-Formatting: Do NOT format casual chat answers like technical manuals, academic whitepapers, or changelogs. Avoid unnecessary markdown headers (e.g. "### 1.", "### 2."), divider lines ("---"), or deep bulleted taxonomies for straightforward conversational questions.\n` +
+        `• Technical Depth Without Bloat: Answer technical questions with laser precision, authentic systems knowledge, and depth without lecturing or generating repetitive filler text.\n` +
+        `• Code Snippets: When sharing code, share clean, focused snippets. Large codeblocks (>25 lines) are automatically packaged into downloadable file attachments by the gateway.`
       );
     }
 
