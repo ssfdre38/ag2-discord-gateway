@@ -143,9 +143,10 @@ it("isolates non-admin community members and NEVER grants access to adminConvers
   const agy = new AgySessionManager();
   const shaneCtx = { id: "987654321098765432", username: "shane", isAdmin: false };
 
-  // Fresh turn has no user session yet
+  // Fresh turn automatically gets an isolated, unique UUID
   const resolvedFresh = agy.resolveSessionId(shaneCtx);
-  assert.strictEqual(resolvedFresh, null); // Must be null so AG2 creates a fresh dedicated user session
+  assert.ok(resolvedFresh); // Auto-generated RFC 4122 UUID ensures CLI never attaches to admin sovereign workspace
+  assert.notStrictEqual(resolvedFresh, agy.adminConversationId);
 
   // Binding a session to Shane
   agy.bindSession("shane-session-uuid-1111", shaneCtx);
@@ -202,8 +203,13 @@ it("handles session unbinding/resetting cleanly across admin, thread, and user c
 
   agy.resetSession(user);
   agy.resetSession(thread);
-  assert.strictEqual(agy.resolveSessionId(user), null);
-  assert.strictEqual(agy.resolveSessionId(null, thread), null);
+  const nextUserSess = agy.resolveSessionId(user);
+  const nextThreadSess = agy.resolveSessionId(null, thread);
+  assert.notStrictEqual(nextUserSess, "sess-u");
+  assert.notStrictEqual(nextThreadSess, "sess-t");
+  assert.notStrictEqual(nextUserSess, agy.adminConversationId);
+  assert.ok(nextUserSess);
+  assert.ok(nextThreadSess);
 });
 
 console.log("\n=======================================================");

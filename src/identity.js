@@ -17,21 +17,24 @@ export function resolveAuthorContext(user, member = null) {
   const username = user.username || "unknown_user";
   const displayName = member?.displayName || user.displayName || username;
 
-  // 1. Immutable Owner & Administrator verification
-  const isOwner = config.adminUsers.length > 0 && config.adminUsers[0] === userId;
-  const isAdmin = isOwner || (config.adminUsers.length === 0 ? true : config.adminUsers.includes(userId));
+  // 1. Immutable Owner & Administrator verification (strictly bound to Discord Snowflake ID)
+  const adminList = (config.adminUsers || []).map(u => String(u).trim()).filter(Boolean);
+  const isOwner = Boolean(adminList.length > 0 && adminList[0] === String(userId));
+  const isAdmin = Boolean(adminList.length > 0 && adminList.includes(String(userId)));
 
   // 2. Anti-Impersonation & Nickname Spoof Detection
-  // Protected names that represent the bot creator, owner, or system admins
+  // Protected names representing bot owner, creator, or system administrators
   const protectedNames = ["daniel", "ssfdre", "admin", "owner", "ash", "gaming2gamers"];
   const lowerDisplay = displayName.trim().toLowerCase();
   const lowerUser = username.trim().toLowerCase();
 
-  // A user is impersonating if they are NOT an admin, but their display nickname mimics a protected admin/owner name
+  // A user is impersonating if their Discord ID is NOT in adminUsers, but their server display name or nickname mimics a protected admin name
   const isImpersonating = !isAdmin && protectedNames.some((name) => {
     return (
       lowerDisplay === name ||
       lowerDisplay.startsWith(`${name} `) ||
+      lowerDisplay.startsWith(`${name}[`) ||
+      lowerDisplay.startsWith(`${name}(`) ||
       lowerDisplay.endsWith(` ${name}`) ||
       lowerDisplay.includes(`[${name}]`) ||
       lowerDisplay.includes(`(${name})`) ||
@@ -42,7 +45,7 @@ export function resolveAuthorContext(user, member = null) {
 
   // 3. Known Project Collaborators (Explicitly granted by Daniel)
   // Chris (@driver_2_gamer / 1227226205544255498) is authorized to collaborate on BarrerAvatarStudio
-  const isCollaborator = userId === "1227226205544255498";
+  const isCollaborator = String(userId) === "1227226205544255498";
   const collaboratorProjects = isCollaborator ? ["BarrerAvatarStudio"] : [];
 
   return {
