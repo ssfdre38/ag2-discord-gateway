@@ -8,3 +8,14 @@ data/*.json
 data/media_cache/
 data/artifacts/
 !data/.gitkeep
+
+# Private YouTube Music Integration & Account Credentials (DO NOT UPLOAD)
+data/ytmusic/
+*.oauth.json
+oauth.json
+browser.json
+headers_auth.json
+scripts/ytmusic*
+src/ytmusic*
+tests/ytmusic*
+

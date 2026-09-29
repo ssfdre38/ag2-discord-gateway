@@ -12,6 +12,19 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT || "18895", 10);
 const HTTP_HOST = process.env.HTTP_HOST || "127.0.0.1";
 const BASE_URL = `http://${HTTP_HOST}:${HTTP_PORT}`;
 
+// Dynamically load optional local extensions (e.g. private YouTube Music tools)
+let extraTools = [];
+let extraHandler = null;
+try {
+  const ytmMcp = await import("./ytmusic-mcp.js").catch(() => null);
+  if (ytmMcp) {
+    extraTools = ytmMcp.YTMUSIC_TOOLS || [];
+    extraHandler = ytmMcp.handleYtMusicToolCall || null;
+  }
+} catch {
+  // Ignored if not present
+}
+
 const TOOLS = [
   {
     name: "discord_post_message",
@@ -91,6 +104,10 @@ async function callGateway(endpoint, method = "GET", body = null) {
 }
 
 async function handleToolCall(name, args) {
+  if (extraHandler && name.startsWith("ytmusic_")) {
+    return await extraHandler(name, args, callGateway);
+  }
+
   switch (name) {
     case "discord_post_message": {
       const res = await callGateway("/api/send", "POST", {
@@ -204,7 +221,7 @@ rl.on("line", async (line) => {
     }
 
     if (method === "tools/list") {
-      sendResponse(id, { tools: TOOLS });
+      sendResponse(id, { tools: [...TOOLS, ...extraTools] });
       return;
     }
 

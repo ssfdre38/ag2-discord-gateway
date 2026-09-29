@@ -11,6 +11,17 @@ import { getMediaPipeline } from "./media-pipeline.js";
 import { getVoiceManager } from "./voice-manager.js";
 import { getReactionEngine } from "./reaction-engine.js";
 
+// Dynamic loader for private YouTube Music extension (Local Hook)
+let getYouTubeMusicService = null;
+try {
+  const ytmMod = await import("./ytmusic-service.js").catch(() => null);
+  if (ytmMod?.getYouTubeMusicService) {
+    getYouTubeMusicService = ytmMod.getYouTubeMusicService;
+  }
+} catch {
+  // Not installed or ignored
+}
+
 export function createHttpActuationServer(client, hmb, config, voiceManager = null, reactionEngine = null) {
   const parseJsonBody = (req) => {
     return new Promise((resolve, reject) => {
@@ -380,6 +391,157 @@ export function createHttpActuationServer(client, hmb, config, voiceManager = nu
         const vm = voiceManager || getVoiceManager();
         const status = vm.getStatus(guildId);
         sendJson(res, 200, { ok: true, guildId, ...status });
+        return;
+      }
+
+      // ─── YouTube Music Account & Discovery Routes ─────────────────────────────
+      if (pathname.startsWith("/api/ytmusic/")) {
+        if (!getYouTubeMusicService) {
+          sendJson(res, 501, { ok: false, error: "YouTube Music extension is not installed or enabled in this gateway build." });
+          return;
+        }
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/status") {
+        const ytm = getYouTubeMusicService();
+        const status = await ytm.getStatus();
+        sendJson(res, 200, { ok: true, ...status });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/search") {
+        const query = searchParams.get("q") || searchParams.get("query") || "";
+        if (!query) {
+          sendJson(res, 400, { ok: false, error: "Query parameter 'q' or 'query' is required." });
+          return;
+        }
+        const filter = searchParams.get("filter") || "songs";
+        const limit = parseInt(searchParams.get("limit") || "10", 10);
+        const ytm = getYouTubeMusicService();
+        const results = await ytm.search(query, { filter, limit });
+        sendJson(res, 200, { ok: true, ...results });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/liked") {
+        const limit = parseInt(searchParams.get("limit") || "25", 10);
+        const ytm = getYouTubeMusicService();
+        const liked = await ytm.getLikedSongs(limit);
+        sendJson(res, 200, { ok: true, ...liked });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/playlists") {
+        const limit = parseInt(searchParams.get("limit") || "25", 10);
+        const ytm = getYouTubeMusicService();
+        const playlists = await ytm.getPlaylists(limit);
+        sendJson(res, 200, { ok: true, ...playlists });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/playlist") {
+        const playlistId = searchParams.get("id") || searchParams.get("playlistId");
+        if (!playlistId) {
+          sendJson(res, 400, { ok: false, error: "Query parameter 'id' or 'playlistId' is required." });
+          return;
+        }
+        const limit = parseInt(searchParams.get("limit") || "50", 10);
+        const ytm = getYouTubeMusicService();
+        const playlist = await ytm.getPlaylistDetails(playlistId, limit);
+        sendJson(res, 200, { ok: true, ...playlist });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/ytmusic/playlist/create") {
+        const body = await parseJsonBody(req);
+        if (!body.title) {
+          sendJson(res, 400, { ok: false, error: "Field 'title' is required." });
+          return;
+        }
+        const ytm = getYouTubeMusicService();
+        const result = await ytm.createPlaylist(body.title, body);
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/ytmusic/playlist/add") {
+        const body = await parseJsonBody(req);
+        if (!body.playlistId || !body.videoIds) {
+          sendJson(res, 400, { ok: false, error: "Fields 'playlistId' and 'videoIds' are required." });
+          return;
+        }
+        const ytm = getYouTubeMusicService();
+        const result = await ytm.addToPlaylist(body.playlistId, body.videoIds);
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/history") {
+        const limit = parseInt(searchParams.get("limit") || "20", 10);
+        const ytm = getYouTubeMusicService();
+        const history = await ytm.getHistory(limit);
+        sendJson(res, 200, { ok: true, ...history });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/ytmusic/rate") {
+        const body = await parseJsonBody(req);
+        if (!body.videoId) {
+          sendJson(res, 400, { ok: false, error: "Field 'videoId' is required." });
+          return;
+        }
+        const ytm = getYouTubeMusicService();
+        const result = await ytm.rateSong(body.videoId, body.rating || "LIKE");
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/song") {
+        const videoId = searchParams.get("videoId") || searchParams.get("id");
+        if (!videoId) {
+          sendJson(res, 400, { ok: false, error: "Query parameter 'videoId' is required." });
+          return;
+        }
+        const ytm = getYouTubeMusicService();
+        const info = await ytm.getSongInfo(videoId);
+        sendJson(res, 200, { ok: true, ...info });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/lyrics") {
+        const videoId = searchParams.get("videoId") || searchParams.get("id");
+        if (!videoId) {
+          sendJson(res, 400, { ok: false, error: "Query parameter 'videoId' is required." });
+          return;
+        }
+        const ytm = getYouTubeMusicService();
+        const lyrics = await ytm.getLyrics(videoId);
+        sendJson(res, 200, { ok: true, ...lyrics });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/ytmusic/recommendations") {
+        const videoId = searchParams.get("videoId") || searchParams.get("id");
+        if (!videoId) {
+          sendJson(res, 400, { ok: false, error: "Query parameter 'videoId' is required." });
+          return;
+        }
+        const limit = parseInt(searchParams.get("limit") || "10", 10);
+        const ytm = getYouTubeMusicService();
+        const recs = await ytm.getRecommendations(videoId, limit);
+        sendJson(res, 200, { ok: true, ...recs });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/ytmusic/setup") {
+        const body = await parseJsonBody(req);
+        if (!body.headers) {
+          sendJson(res, 400, { ok: false, error: "Field 'headers' (raw headers string or JSON) is required." });
+          return;
+        }
+        const ytm = getYouTubeMusicService();
+        const result = await ytm.setupHeaders(body.headers);
+        sendJson(res, 200, { ok: true, ...result });
         return;
       }
 

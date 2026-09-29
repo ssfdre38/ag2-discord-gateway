@@ -20,6 +20,114 @@ import {
 import { splitDiscordMessage } from "./text-chunker.js";
 import { resolveAuthorContext } from "./identity.js";
 
+// Dynamic loader for private YouTube Music extension (Local Hook)
+let handleYtMusicCommand = null;
+let getYouTubeMusicService = null;
+try {
+  const ytmBotMod = await import("./ytmusic-bot.js").catch(() => null);
+  if (ytmBotMod?.handleYtMusicCommand) {
+    handleYtMusicCommand = ytmBotMod.handleYtMusicCommand;
+  }
+  const ytmSvcMod = await import("./ytmusic-service.js").catch(() => null);
+  if (ytmSvcMod?.getYouTubeMusicService) {
+    getYouTubeMusicService = ytmSvcMod.getYouTubeMusicService;
+  }
+} catch {
+  // Ignored if not present
+}
+
+// ─── YouTube Music Cache & Context Enrichment ─────────────────────────
+const ytmCache = {
+  history: null,
+  historyTime: 0,
+  liked: null,
+  likedTime: 0,
+  playlists: null,
+  playlistsTime: 0
+};
+
+async function getEnrichedYtMusicContext(displayName, promptText) {
+  if (!getYouTubeMusicService) return null;
+  const ytm = getYouTubeMusicService();
+  const lower = promptText.toLowerCase();
+  const now = Date.now();
+  const CACHE_TTL = 300000; // 5 minutes
+
+  const wantsPlaylists = /(playlist|playlists|mix|collection)/i.test(lower);
+  const wantsLiked = /(liked|favorite|favourite|taste|love|fav|likes)/i.test(lower);
+  const wantsHistory = /(history|recent|playing|listening|song|music|played|heard|queue|track)/i.test(lower);
+  const wantsOverview = /(account|library|youtube\s*music|ytm|all\s*music|overview|what.*listen)/i.test(lower);
+
+  const sections = [];
+
+  try {
+    // 1. Listening History
+    if (wantsHistory || wantsOverview) {
+      if (!ytmCache.history || now - ytmCache.historyTime > 60000) {
+        const histRes = await ytm.getHistory(10);
+        if (histRes?.history) {
+          ytmCache.history = histRes.history;
+          ytmCache.historyTime = now;
+        }
+      }
+      if (ytmCache.history?.length) {
+        const recents = ytmCache.history
+          .map((t, idx) => `${idx + 1}. "${t.title}" by ${t.artists?.join(", ") || "Unknown"}${t.played ? ` (${t.played})` : ""}`)
+          .join("\n");
+        sections.push(`[Recent YouTube Music Listening History for ${displayName}]:\n${recents}`);
+      }
+    }
+
+    // 2. Personal Liked Songs
+    if (wantsLiked || wantsOverview) {
+      if (!ytmCache.liked || now - ytmCache.likedTime > CACHE_TTL) {
+        const likedRes = await ytm.getLikedSongs(15);
+        const tracks = likedRes.tracks || likedRes.liked?.tracks || [];
+        if (tracks.length > 0) {
+          ytmCache.liked = {
+            tracks,
+            count: likedRes.trackCount || likedRes.liked?.trackCount || tracks.length
+          };
+          ytmCache.likedTime = now;
+        }
+      }
+      if (ytmCache.liked?.tracks?.length) {
+        const likedList = ytmCache.liked.tracks
+          .map((t, idx) => {
+            const artist = Array.isArray(t.artists)
+              ? t.artists.map(a => typeof a === "string" ? a : (a?.name || "")).filter(Boolean).join(", ")
+              : (t.author || "Unknown");
+            return `${idx + 1}. "${t.title}" by ${artist}`;
+          })
+          .join("\n");
+        sections.push(`[Personal Liked Songs Library (${ytmCache.liked.count} total liked tracks) for ${displayName}]:\n${likedList}`);
+      }
+    }
+
+    // 3. User Playlists
+    if (wantsPlaylists || wantsOverview) {
+      if (!ytmCache.playlists || now - ytmCache.playlistsTime > CACHE_TTL) {
+        const plRes = await ytm.getPlaylists(20);
+        if (plRes?.playlists) {
+          ytmCache.playlists = plRes.playlists;
+          ytmCache.playlistsTime = now;
+        }
+      }
+      if (ytmCache.playlists?.length) {
+        const plList = ytmCache.playlists
+          .filter(p => p.playlistId !== "LM") // Exclude 'Liked Music' duplicate
+          .map((p, idx) => `${idx + 1}. "${p.title}"${p.count ? ` (${p.count} tracks)` : ""}`)
+          .join("\n");
+        sections.push(`[Personal YouTube Music Library Playlists for ${displayName}]:\n${plList}`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[YouTube Music Context Injection] Notice: ${err.message}`);
+  }
+
+  return sections.length > 0 ? sections.join("\n\n") : null;
+}
+
 export function createDiscordBot() {
   const client = new Client({
     intents: [
@@ -346,6 +454,18 @@ export function createDiscordBot() {
       }
     }
 
+    // ─── YouTube Music Personal Account Commands ─────────────────────────────
+    if (handleYtMusicCommand) {
+      try {
+        const handled = await handleYtMusicCommand(message, cleanText, { authorContext, isAdmin });
+        if (handled) return;
+      } catch (ytmErr) {
+        console.error(`[YouTube Music Error] ${ytmErr.message}`);
+        await message.reply(`⚠️ **YouTube Music Error**: ${ytmErr.message}`);
+        return;
+      }
+    }
+
     // ─── HMB Memory Bank Commands ───────────────────────────────────────────
     if (commandLower === "!hmb" || commandLower === "!memory" || commandLower === "hmb" || commandLower === "memory") {
       const count = hmb.getMemoryCount();
@@ -510,6 +630,14 @@ export function createDiscordBot() {
 
         if (mediaContext) {
           promptToSend = `${promptToSend}${mediaContext}`;
+        }
+
+        // Live YouTube Music Account & Library Context Injection for Admin (Daniel)
+        if (authorContext.isAdmin && /(music|song|listening|played|history|track|queue|playing|heard|playlist|playlists|liked|favorite|taste|artist|album|band|youtube\s*music|ytm)/i.test(cleanPromptText)) {
+          const ytmContext = await getEnrichedYtMusicContext(authorContext.displayName, cleanPromptText);
+          if (ytmContext) {
+            promptToSend = `${ytmContext}\n\n${promptToSend}`;
+          }
         }
 
         const turnOptions = {
