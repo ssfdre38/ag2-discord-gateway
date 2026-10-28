@@ -20,6 +20,80 @@ export const HEADER_SIZE = 136; // 136 bytes
 export const RECORD_SIZE = 84; // 84 bytes
 export const DEFAULT_EMBEDDING_DIM = 128;
 
+// ─── Partition Categories (aligned with haven-cpp / haven_memory.h) ────────
+export const HMB_CATEGORIES = [
+  "CORE_IDENTITY",
+  "EPISODIC",
+  "SEMANTIC",
+  "EMOTIONAL"
+] as const;
+
+export type HmbCategory = (typeof HMB_CATEGORIES)[number] | string;
+
+export function normalizeHmbCategory(rawCategory: string): HmbCategory {
+  if (!rawCategory || typeof rawCategory !== "string") return "EPISODIC";
+  const upper = rawCategory.trim().toUpperCase().replace(/[-\s]+/g, "_");
+
+  if (upper === "CORE_IDENTITY" || upper === "CORE" || upper === "IDENTITY" || upper === "PERSONA" || upper === "SOVEREIGN") {
+    return "CORE_IDENTITY";
+  }
+  if (
+    upper === "SEMANTIC" ||
+    upper === "FACT" ||
+    upper === "FACTS" ||
+    upper === "KNOWLEDGE" ||
+    upper === "TECH" ||
+    upper === "TECHNICAL" ||
+    upper === "LORE" ||
+    upper === "SUMMARY" ||
+    upper === "ARCH" ||
+    upper === "ARCHITECTURE"
+  ) {
+    return "SEMANTIC";
+  }
+  if (upper === "EMOTIONAL" || upper === "SENTIMENT" || upper === "FEELING" || upper === "FEELINGS" || upper === "RELATIONSHIP" || upper === "MOOD") {
+    return "EMOTIONAL";
+  }
+  if (upper === "EPISODIC" || upper === "EVENT" || upper === "INTERACTION" || upper === "CHAT" || upper === "MILESTONE") {
+    return "EPISODIC";
+  }
+  return upper;
+}
+
+export function parseMemoryTag(rawTagBody: string): { category: string; concept: string; content: string } {
+  if (!rawTagBody || typeof rawTagBody !== "string") {
+    return { category: "EPISODIC", concept: "", content: "" };
+  }
+
+  const trimmed = rawTagBody.trim();
+  const pipeParts = trimmed.split("|").map(p => p.trim());
+
+  let category = "EPISODIC";
+  let concept = "";
+  let content = "";
+
+  if (pipeParts.length >= 3) {
+    category = normalizeHmbCategory(pipeParts[0]);
+    concept = pipeParts[1];
+    content = pipeParts.slice(2).join(" | ").trim();
+  } else if (pipeParts.length === 2) {
+    const colonMatch = pipeParts[0].match(/^([A-Za-z_]+)\s*:\s*(.+)$/);
+    if (colonMatch) {
+      category = normalizeHmbCategory(colonMatch[1]);
+      concept = colonMatch[2].trim();
+    } else {
+      category = "EPISODIC";
+      concept = pipeParts[0];
+    }
+    content = pipeParts[1];
+  } else if (pipeParts.length === 1) {
+    concept = pipeParts[0];
+    content = pipeParts[0];
+  }
+
+  return { category, concept, content };
+}
+
 // ─── Interfaces ─────────────────────────────────────────────────────────────
 export interface MemoryAnchor {
   id: number | bigint;

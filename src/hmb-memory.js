@@ -19,6 +19,94 @@ export const HEADER_SIZE = 136;
 export const RECORD_SIZE = 84;
 export const DEFAULT_EMBEDDING_DIM = 128;
 
+// ─── Partition Categories (aligned with haven-cpp / haven_memory.h) ────────
+export const HMB_CATEGORIES = [
+  "CORE_IDENTITY",
+  "EPISODIC",
+  "SEMANTIC",
+  "EMOTIONAL"
+];
+
+/**
+ * Normalizes category inputs and common aliases into canonical HMB partition names.
+ * @param {string} rawCategory
+ * @returns {"CORE_IDENTITY"|"EPISODIC"|"SEMANTIC"|"EMOTIONAL"|string}
+ */
+export function normalizeHmbCategory(rawCategory) {
+  if (!rawCategory || typeof rawCategory !== "string") return "EPISODIC";
+  const upper = rawCategory.trim().toUpperCase().replace(/[-\s]+/g, "_");
+
+  if (upper === "CORE_IDENTITY" || upper === "CORE" || upper === "IDENTITY" || upper === "PERSONA" || upper === "SOVEREIGN") {
+    return "CORE_IDENTITY";
+  }
+  if (
+    upper === "SEMANTIC" ||
+    upper === "FACT" ||
+    upper === "FACTS" ||
+    upper === "KNOWLEDGE" ||
+    upper === "TECH" ||
+    upper === "TECHNICAL" ||
+    upper === "LORE" ||
+    upper === "SUMMARY" ||
+    upper === "ARCH" ||
+    upper === "ARCHITECTURE"
+  ) {
+    return "SEMANTIC";
+  }
+  if (upper === "EMOTIONAL" || upper === "SENTIMENT" || upper === "FEELING" || upper === "FEELINGS" || upper === "RELATIONSHIP" || upper === "MOOD") {
+    return "EMOTIONAL";
+  }
+  if (upper === "EPISODIC" || upper === "EVENT" || upper === "INTERACTION" || upper === "CHAT" || upper === "MILESTONE") {
+    return "EPISODIC";
+  }
+  return upper;
+}
+
+/**
+ * Parses [REMEMBER: ...] and [MEMORY: ...] tag bodies with optional category partition.
+ * Supported formats:
+ *  - 3-part: [REMEMBER: CATEGORY | Concept Name | Content]
+ *  - 2-part with colon: [REMEMBER: CATEGORY: Concept Name | Content]
+ *  - 2-part standard: [REMEMBER: Concept Name | Content] (defaults to EPISODIC)
+ *  - 1-part single: [REMEMBER: Content]
+ * 
+ * @param {string} rawTagBody - Body text inside the remember tag
+ * @returns {{ category: string, concept: string, content: string }}
+ */
+export function parseMemoryTag(rawTagBody) {
+  if (!rawTagBody || typeof rawTagBody !== "string") {
+    return { category: "EPISODIC", concept: "", content: "" };
+  }
+
+  const trimmed = rawTagBody.trim();
+  const pipeParts = trimmed.split("|").map(p => p.trim());
+
+  let category = "EPISODIC";
+  let concept = "";
+  let content = "";
+
+  if (pipeParts.length >= 3) {
+    category = normalizeHmbCategory(pipeParts[0]);
+    concept = pipeParts[1];
+    content = pipeParts.slice(2).join(" | ").trim();
+  } else if (pipeParts.length === 2) {
+    const colonMatch = pipeParts[0].match(/^([A-Za-z_]+)\s*:\s*(.+)$/);
+    if (colonMatch) {
+      category = normalizeHmbCategory(colonMatch[1]);
+      concept = colonMatch[2].trim();
+    } else {
+      category = "EPISODIC";
+      concept = pipeParts[0];
+    }
+    content = pipeParts[1];
+  } else if (pipeParts.length === 1) {
+    concept = pipeParts[0];
+    content = pipeParts[0];
+  }
+
+  return { category, concept, content };
+}
+
 // ─── 64-Bit FNV-1a Hash ─────────────────────────────────────────────────────
 const FNV_OFFSET_64 = 14695981039346656037n;
 const FNV_PRIME_64 = 1099511628211n;
@@ -124,13 +212,32 @@ export class HmbMemoryEngine {
     const id = anchor.id !== undefined ? BigInt(anchor.id) : this.nextId++;
     if (id >= this.nextId) this.nextId = id + 1n;
 
+    const category = normalizeHmbCategory(anchor.category || "EPISODIC");
+
+    // Dynamic default salience & emotional resonance based on partition
+    let defaultWeight = 0.90;
+    let defaultEmotional = 0.90;
+    if (category === "CORE_IDENTITY") {
+      defaultWeight = 1.0;
+      defaultEmotional = 1.0;
+    } else if (category === "SEMANTIC") {
+      defaultWeight = 0.95;
+      defaultEmotional = 0.85;
+    } else if (category === "EMOTIONAL") {
+      defaultWeight = 0.90;
+      defaultEmotional = 0.98;
+    } else if (category === "EPISODIC") {
+      defaultWeight = 0.85;
+      defaultEmotional = 0.90;
+    }
+
     const fullAnchor = {
       id,
       concept_name: anchor.concept_name,
       text_content: anchor.text_content,
-      category: anchor.category || "EPISODIC",
-      weight: anchor.weight !== undefined ? anchor.weight : 1.0,
-      emotional_salience: anchor.emotional_salience !== undefined ? anchor.emotional_salience : 0.95,
+      category,
+      weight: anchor.weight !== undefined ? anchor.weight : defaultWeight,
+      emotional_salience: anchor.emotional_salience !== undefined ? anchor.emotional_salience : defaultEmotional,
       timestamp: anchor.timestamp !== undefined ? BigInt(anchor.timestamp) : BigInt(Date.now() * 1000),
       access_count: anchor.access_count !== undefined ? BigInt(anchor.access_count) : 0n,
       embedding: anchor.embedding && anchor.embedding.length === this.embeddingDim
@@ -146,6 +253,30 @@ export class HmbMemoryEngine {
     return this.memories;
   }
 
+  getMemoriesByCategory(category) {
+    const norm = normalizeHmbCategory(category);
+    return this.memories.filter(m => m.category === norm);
+  }
+
+  getCategoryStats() {
+    const stats = {
+      CORE_IDENTITY: 0,
+      EPISODIC: 0,
+      SEMANTIC: 0,
+      EMOTIONAL: 0,
+      OTHER: 0,
+      TOTAL: this.memories.length
+    };
+    for (const m of this.memories) {
+      if (stats[m.category] !== undefined) {
+        stats[m.category]++;
+      } else {
+        stats.OTHER++;
+      }
+    }
+    return stats;
+  }
+
   getMemoryCount() {
     return this.memories.length;
   }
@@ -156,21 +287,47 @@ export class HmbMemoryEngine {
   }
 
   // ─── Semantic Top-K Search (Cosine + Salience + Emotional Resonance) ─────
-  searchTopK(query, k = 3, minSimilarity = 0.15) {
+  searchTopK(query, k = 3, minSimilarity = 0.15, options = {}) {
     if (this.memories.length === 0) return [];
 
     const queryVec = typeof query === "string"
       ? createSemanticVector(query, this.embeddingDim)
       : query;
 
+    // Category filtering & boost options
+    const targetCategories = options.category
+      ? [normalizeHmbCategory(options.category)]
+      : options.categories
+        ? options.categories.map(c => normalizeHmbCategory(c))
+        : null;
+
+    const excludeCategories = options.excludeCategory
+      ? [normalizeHmbCategory(options.excludeCategory)]
+      : options.excludeCategories
+        ? options.excludeCategories.map(c => normalizeHmbCategory(c))
+        : null;
+
+    const categoryBoosts = options.categoryBoosts || null;
+
     const scored = [];
 
     for (const mem of this.memories) {
       if (!mem.embedding || mem.embedding.length === 0) continue;
 
+      if (targetCategories && !targetCategories.includes(mem.category)) {
+        continue;
+      }
+      if (excludeCategories && excludeCategories.includes(mem.category)) {
+        continue;
+      }
+
       const sim = cosineSimilarity(queryVec, mem.embedding);
       // Formula matching haven-cpp: sim * weight * (0.8 + 0.2 * emotional_salience)
-      const score = sim * mem.weight * (0.8 + 0.2 * mem.emotional_salience);
+      let score = sim * mem.weight * (0.8 + 0.2 * mem.emotional_salience);
+
+      if (categoryBoosts && categoryBoosts[mem.category]) {
+        score *= categoryBoosts[mem.category];
+      }
 
       if (score >= minSimilarity) {
         scored.push({ anchor: mem, score, similarity: sim });
@@ -188,8 +345,11 @@ export class HmbMemoryEngine {
   }
 
   // ─── Format Context Injection for AG2 Prompt ──────────────────────────────
-  buildContextInjection(userPrompt, topK = 3) {
-    const recalled = this.searchTopK(userPrompt, topK);
+  buildContextInjection(userPrompt, optionsOrTopK = 3) {
+    const opts = typeof optionsOrTopK === "number" ? { topK: optionsOrTopK } : (optionsOrTopK || {});
+    const topK = opts.topK || 3;
+    const minSim = opts.minSimilarity !== undefined ? opts.minSimilarity : 0.15;
+    const recalled = this.searchTopK(userPrompt, topK, minSim, opts);
     if (recalled.length === 0) return "";
 
     let text = "\n[Hierarchical Memory Buffer (HMB) Recall]:\n";

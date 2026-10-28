@@ -110,6 +110,26 @@ it("recognizes Chris as an authorized project collaborator for BarrerAvatarStudi
   assert.deepStrictEqual(ctx.collaboratorProjects, ["BarrerAvatarStudio"]);
 });
 
+it("recognizes linked collaborator account 1535362951006126223 for BarrerAvatarStudio", () => {
+  const linkedUser = {
+    id: "1535362951006126223",
+    username: "chris_alt",
+    displayName: "chris_alt"
+  };
+  const linkedMember = {
+    displayName: "Chris Alt"
+  };
+
+  const ctx = resolveAuthorContext(linkedUser, linkedMember);
+
+  assert.strictEqual(ctx.id, "1535362951006126223");
+  assert.strictEqual(ctx.isAdmin, false);
+  assert.strictEqual(ctx.isOwner, false);
+  assert.strictEqual(ctx.isImpersonating, false);
+  assert.strictEqual(ctx.isCollaborator, true);
+  assert.deepStrictEqual(ctx.collaboratorProjects, ["BarrerAvatarStudio"]);
+});
+
 it("catches sneaky nickname variations (case insensitive, brackets, ssfdre)", () => {
   const badActor = { id: "123456", username: "troll" };
 

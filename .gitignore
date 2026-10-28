@@ -9,6 +9,16 @@ data/media_cache/
 data/artifacts/
 !data/.gitkeep
 
+# Temporary test audio and media
+data/temp_audio/
+*.png
+*.jpg
+*.jpeg
+*.mp3
+*.wav
+__pycache__/
+*.pyc
+
 # Private YouTube Music Integration & Account Credentials (DO NOT UPLOAD)
 data/ytmusic/
 *.oauth.json

@@ -142,6 +142,31 @@ async function run() {
     assert(res.cleanText.includes(shortCode));
   });
 
+  it("extractOutgoingMedia supports forward slashes, file:/// URLs, and [ATTACH: path] tags up to 25MB", () => {
+    const testVideo = path.resolve(process.cwd(), "data", "test_media_cache", "sample_trailer.mp4");
+    const testAudio = path.resolve(process.cwd(), "data", "test_media_cache", "audio_stem.wav");
+    const testZip = path.resolve(process.cwd(), "data", "test_media_cache", "assets.zip");
+
+    fs.writeFileSync(testVideo, Buffer.alloc(1024 * 1024 * 5)); // 5 MB video
+    fs.writeFileSync(testAudio, Buffer.alloc(1024 * 500));        // 500 KB audio
+    fs.writeFileSync(testZip, Buffer.alloc(1024 * 1024 * 12));   // 12 MB zip
+
+    const forwardSlashVideo = testVideo.replace(/\\/g, "/");
+    const fileUriAudio = `file:///${testAudio.replace(/\\/g, "/")}`;
+
+    const aiMessage = `Hey Daniel, here is the new trailer: ${forwardSlashVideo}\nAnd stem: ${fileUriAudio}\nAlso packaged: [ATTACH: ${testZip}]`;
+    const res = pipeline.extractOutgoingMedia(aiMessage);
+
+    assert.strictEqual(res.filesToAttach.length, 3);
+    assert(res.cleanText.includes("📎 **Attached**: `assets.zip` (12.00 MB)"));
+    assert(!res.cleanText.includes("[ATTACH:"));
+
+    // Cleanup
+    if (fs.existsSync(testVideo)) fs.unlinkSync(testVideo);
+    if (fs.existsSync(testAudio)) fs.unlinkSync(testAudio);
+    if (fs.existsSync(testZip)) fs.unlinkSync(testZip);
+  });
+
   await itAsync("ffmpeg keyframe and storyboard extraction runs on synthetic media", async () => {
     // Generate a tiny 1-second synthetic GIF using ffmpeg testsrc
     const testVideo = path.resolve(process.cwd(), "data", "test_media_cache", "synthetic_test.gif");

@@ -44,8 +44,10 @@ export function resolveAuthorContext(user, member = null) {
   });
 
   // 3. Known Project Collaborators (Explicitly granted by Daniel)
-  // Chris (@driver_2_gamer / 1227226205544255498) is authorized to collaborate on BarrerAvatarStudio
-  const isCollaborator = String(userId) === "1227226205544255498";
+  // Chris (@driver_2_gamer / 1227226205544255498) and linked account (1535362951006126223)
+  // are authorized collaborators on source/BarrerAvatarStudio
+  const collaboratorList = ["1227226205544255498", "1535362951006126223"];
+  const isCollaborator = collaboratorList.includes(String(userId));
   const collaboratorProjects = isCollaborator ? ["BarrerAvatarStudio"] : [];
 
   return {

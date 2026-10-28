@@ -15,6 +15,8 @@ export class MediaPipeline {
     this.cacheDir = options.cacheDir || path.resolve(process.cwd(), "data", "media_cache");
     this.artifactDir = options.artifactDir || path.resolve(process.cwd(), "data", "artifacts");
     this.maxInlineCodeLines = options.maxInlineCodeLines ?? 25;
+    this.maxAttachmentSizeBytes = options.maxAttachmentSizeBytes ||
+      (parseInt(process.env.MAX_ATTACHMENT_SIZE_MB || "25", 10) * 1024 * 1024);
     this.ocrBinPath = options.ocrBinPath || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\ocr_helper.exe";
     this.maxAgeMs = options.maxAgeMs || 24 * 60 * 60 * 1000; // 24 hours
     this.ensureCacheDir();
@@ -429,31 +431,69 @@ export class MediaPipeline {
     const filesToAttach = [];
     const seen = new Set();
     const maxLines = options.maxInlineCodeLines ?? this.maxInlineCodeLines;
+    const maxSizeBytes = options.maxAttachmentSizeBytes ?? this.maxAttachmentSizeBytes;
 
-    // Pattern 1: Markdown image ![alt](path or file:///path)
-    const mdRegex = /!\[.*?\]\((?:file:\/\/\/)?([a-zA-Z]:[^\)\s]+\.(?:png|jpg|jpeg|gif|webp|mp4))\)/gi;
-    let match;
-    while ((match = mdRegex.exec(workingText)) !== null) {
-      const candidate = path.normalize(match[1]);
-      if (fs.existsSync(candidate) && !seen.has(candidate)) {
-        seen.add(candidate);
-        filesToAttach.push(candidate);
-      }
-    }
+    const tryAddFile = (rawCandidate) => {
+      if (!rawCandidate) return null;
+      let cleanCandidate = rawCandidate.trim();
+      cleanCandidate = cleanCandidate.replace(/^file:\/\/\/?/i, "");
+      cleanCandidate = path.normalize(cleanCandidate);
 
-    // Pattern 2: Standalone Windows absolute path ending in media or code/log/patch extension
-    const pathRegex = /(?:file:\/\/\/)?([a-zA-Z]:\\[^\s<>"'`]+\.(?:png|jpg|jpeg|gif|webp|mp4|py|js|ts|cs|cpp|c|h|hpp|sh|ps1|diff|patch|json|sql|log|txt))\b/gi;
-    while ((match = pathRegex.exec(workingText)) !== null) {
-      const candidate = path.normalize(match[1]);
-      if (fs.existsSync(candidate) && !seen.has(candidate)) {
+      if (fs.existsSync(cleanCandidate) && !seen.has(cleanCandidate)) {
         try {
-          const stats = fs.statSync(candidate);
-          if (stats.size > 0 && stats.size <= 8 * 1024 * 1024) {
-            seen.add(candidate);
-            filesToAttach.push(candidate);
+          const stats = fs.statSync(cleanCandidate);
+          if (stats.isFile()) {
+            if (stats.size > 0 && stats.size <= maxSizeBytes) {
+              seen.add(cleanCandidate);
+              filesToAttach.push(cleanCandidate);
+              return { added: true, path: cleanCandidate, size: stats.size };
+            } else if (stats.size > maxSizeBytes) {
+              return { added: false, path: cleanCandidate, size: stats.size, tooLarge: true };
+            }
           }
         } catch {}
       }
+      return null;
+    };
+
+    // Pattern 0: Explicit [ATTACH: path], [ATTACHMENT: path], or [IMAGE: file_path] tags
+    const attachTagRegex = /\[(?:ATTACH|ATTACHMENT|IMAGE_ATTACH):\s*([^\]\r\n]+)\]/gi;
+    workingText = workingText.replace(attachTagRegex, (fullMatch, rawPath) => {
+      let targetPath = rawPath.trim().replace(/^["']|["']$/g, "");
+      const res = tryAddFile(targetPath);
+      if (res && res.added) {
+        const mb = (res.size / (1024 * 1024)).toFixed(2);
+        return `📎 **Attached**: \`${path.basename(res.path)}\` (${mb} MB)`;
+      } else if (res && res.tooLarge) {
+        const mb = (res.size / (1024 * 1024)).toFixed(1);
+        const limitMb = (maxSizeBytes / (1024 * 1024)).toFixed(0);
+        return `⚠️ **Attachment Exceeds Discord Limit**: \`${path.basename(res.path)}\` (${mb} MB > ${limitMb} MB limit)`;
+      }
+      return fullMatch;
+    });
+
+    // Pattern 0b: [IMAGE: file_path] or [IMG: file_path] pointing to existing file on disk
+    const imagePathRegex = /\[(?:IMAGE|IMG):\s*([^\]\r\n]+)\]/gi;
+    workingText = workingText.replace(imagePathRegex, (fullMatch, rawPath) => {
+      let targetPath = rawPath.trim().replace(/^["']|["']$/g, "");
+      const res = tryAddFile(targetPath);
+      if (res && res.added) {
+        return `🖼️ **Attached Image**: \`${path.basename(res.path)}\``;
+      }
+      return fullMatch;
+    });
+
+    // Pattern 1: Markdown image or file link ![alt](path) or [label](file:///path)
+    const mdRegex = /!?\[.*?\]\((?:file:\/\/\/)?([a-zA-Z]:[^\)\s]+\.(?:png|jpg|jpeg|gif|webp|bmp|svg|mp4|webm|mov|mkv|wav|mp3|ogg|flac|m4a|zip|tar|gz|7z|pdf|stl|obj|vrm|fbx|gltf|glb|py|js|ts|cs|cpp|c|h|hpp|sh|ps1|diff|patch|json|sql|log|txt))\)/gi;
+    let match;
+    while ((match = mdRegex.exec(workingText)) !== null) {
+      tryAddFile(match[1]);
+    }
+
+    // Pattern 2: Standalone Windows absolute path (supporting backslashes, forward slashes, and file:///)
+    const pathRegex = /(?:file:\/\/\/)?([a-zA-Z]:[\\\/][^\s<>"'`\)\(\]]+\.(?:png|jpg|jpeg|gif|webp|bmp|svg|mp4|webm|mov|mkv|wav|mp3|ogg|flac|m4a|zip|tar|gz|7z|pdf|stl|obj|vrm|fbx|gltf|glb|py|js|ts|cs|cpp|c|h|hpp|sh|ps1|diff|patch|json|sql|log|txt))\b/gi;
+    while ((match = pathRegex.exec(workingText)) !== null) {
+      tryAddFile(match[1]);
     }
 
     // Pattern 3: Explicit [ARTIFACT: filename.ext] ... [/ARTIFACT] or [FILE: filename.ext] ... [/FILE] tags

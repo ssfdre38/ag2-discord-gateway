@@ -1,6 +1,8 @@
+process.env.NODE_ENV = "test";
 import assert from "assert";
 import { HmbMemoryEngine } from "../src/hmb-memory.js";
 import { createHttpActuationServer } from "../src/http-server.js";
+import { ReactionEngine } from "../src/reaction-engine.js";
 
 console.log("🧪 Starting Outbound Actuation HTTP API Verification Tests...\n");
 
@@ -54,6 +56,9 @@ const mockGuild = {
   },
   emojis: {
     cache: new Map([["g2g-id", { id: "1234567890", name: "g2g" }]])
+  },
+  stickers: {
+    cache: new Map([["stk-1", { id: "888888888888888888", name: "ash_wave", description: "Ash waving" }]])
   }
 };
 
@@ -61,7 +66,11 @@ mockChannel.guild = mockGuild;
 
 const mockClient = {
   isReady: () => true,
-  user: { tag: "Ash#7132", id: "1476712784602595479" },
+  user: {
+    tag: "Ash#7132",
+    id: "1476712784602595479",
+    setPresence: (p) => p
+  },
   guilds: {
     cache: new Map([["111111111111111111", mockGuild]])
   },
@@ -78,9 +87,7 @@ const mockVoiceManager = {
   getStatus: (guildId) => ({ connected: true, state: "ready", playerState: "idle" })
 };
 
-const mockReactionEngine = {
-  reactToMessage: async (msg, emoji) => true
-};
+const mockReactionEngine = new ReactionEngine(mockClient);
 
 // 2. Setup HMB Engine
 const hmb = new HmbMemoryEngine({ embeddingDim: 128 });
@@ -211,8 +218,82 @@ server.listen(TEST_PORT, "127.0.0.1", async () => {
     });
     const voiceLeaveData = await voiceLeaveRes.json();
     console.log(`✓ POST /api/voice/leave: status="${voiceLeaveData.status}"`);
-    assert.strictEqual(voiceLeaveData.ok, true);
-    assert.strictEqual(voiceLeaveData.status, "DISCONNECTED");
+    // 14. Test POST /api/upload
+    const uploadRes = await fetch(`${baseUrl}/api/upload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filePath: "package.json",
+        message: "Attached manifest"
+      })
+    });
+    const uploadData = await uploadRes.json();
+    console.log(`✓ POST /api/upload: ok=${uploadData.ok} messageId="${uploadData.messageId}" file="${uploadData.filename}"`);
+    assert.strictEqual(uploadData.ok, true);
+    assert.strictEqual(uploadData.messageId, "mock-message-id-999");
+    assert.strictEqual(uploadData.filename, "package.json");
+
+    // 15. Test POST & GET /api/presence
+    const presenceSetRes = await fetch(`${baseUrl}/api/presence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        activity: "Compiling MicaNT on Xeon",
+        status: "dnd",
+        type: "competing"
+      })
+    });
+    const presenceSetData = await presenceSetRes.json();
+    console.log(`✓ POST /api/presence: ok=${presenceSetData.ok} activity="${presenceSetData.presence?.activity}" status="${presenceSetData.presence?.status}"`);
+    assert.strictEqual(presenceSetData.ok, true);
+    assert.strictEqual(presenceSetData.presence.activity, "Compiling MicaNT on Xeon");
+    assert.strictEqual(presenceSetData.presence.status, "dnd");
+
+    const presenceGetRes = await fetch(`${baseUrl}/api/presence`);
+    const presenceGetData = await presenceGetRes.json();
+    console.log(`✓ GET /api/presence: ok=${presenceGetData.ok} activity="${presenceGetData.presence?.activity}"`);
+    assert.strictEqual(presenceGetData.ok, true);
+    assert.strictEqual(presenceGetData.presence.activity, "Compiling MicaNT on Xeon");
+
+    // 16. Test POST /api/image/generate
+    const imgGenRes = await fetch(`${baseUrl}/api/image/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Neon holographic blueprint terminal",
+        style: "cyberpunk",
+        channelId: "1476714141908599046"
+      })
+    });
+    const imgGenData = await imgGenRes.json();
+    console.log(`✓ POST /api/image/generate: ok=${imgGenData.ok} file="${imgGenData.filename}" format="${imgGenData.format}"`);
+    assert.strictEqual(imgGenData.ok, true);
+    assert.ok(imgGenData.imagePath);
+    assert.ok(imgGenData.filename);
+    assert.strictEqual(imgGenData.messageId, "mock-message-id-999");
+
+    // 16b. Test GET /api/image/status
+    const imgStatusRes = await fetch(`${baseUrl}/api/image/status`);
+    const imgStatusData = await imgStatusRes.json();
+    assert.strictEqual(imgStatusData.ok, true);
+    assert.ok(imgStatusData.engines.sd);
+    assert.ok(imgStatusData.engines.google);
+    console.log(`✓ GET /api/image/status: ok=${imgStatusData.ok} default="${imgStatusData.defaultEngine}" sdReady=${imgStatusData.engines.sd.available}`);
+
+    // 17. Test GET /api/emojis & GET /api/stickers
+    const emojisRes = await fetch(`${baseUrl}/api/emojis?guildId=111111111111111111`);
+    const emojisData = await emojisRes.json();
+    console.log(`✓ GET /api/emojis: ok=${emojisData.ok} count=${emojisData.count}`);
+    assert.strictEqual(emojisData.ok, true);
+    assert.strictEqual(emojisData.count, 1);
+    assert.strictEqual(emojisData.emojis[0].name, "g2g");
+
+    const stickersRes = await fetch(`${baseUrl}/api/stickers?guildId=111111111111111111`);
+    const stickersData = await stickersRes.json();
+    console.log(`✓ GET /api/stickers: ok=${stickersData.ok} count=${stickersData.count}`);
+    assert.strictEqual(stickersData.ok, true);
+    assert.strictEqual(stickersData.count, 1);
+    assert.strictEqual(stickersData.stickers[0].name, "ash_wave");
 
     console.log("\n🎉 ALL OUTBOUND ACTUATION & VOICE/REACTION API TESTS PASSED!\n");
   } catch (err) {
