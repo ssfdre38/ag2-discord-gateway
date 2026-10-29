@@ -107,6 +107,10 @@ export const config = {
   voiceAutoRead: process.env.VOICE_AUTO_READ !== "false",
   voiceTalkBack: process.env.VOICE_TALK_BACK !== "false",
   voiceAutoJoin: process.env.VOICE_AUTO_JOIN !== "false",
+  voiceAutoReadVoice: process.env.VOICE_AUTO_READ_VOICE || "Zoey",
+  voiceAutoReadMuteInVoice: process.env.VOICE_AUTO_READ_MUTE_IN_VOICE !== "false",
+  voiceBargeIn: process.env.VOICE_BARGE_IN !== "false",
+  voiceSentenceChunking: process.env.VOICE_SENTENCE_CHUNKING !== "false",
   voiceAutoReadMaxChars: parseInt(process.env.VOICE_AUTO_READ_MAX_CHARS || "200", 10),
   voiceTalkBackMaxChars: parseInt(process.env.VOICE_TALK_BACK_MAX_CHARS || "220", 10),
 

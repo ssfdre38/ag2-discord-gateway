@@ -98,3 +98,48 @@ export function splitDiscordMessage(text, maxLength = 1950) {
 
   return chunks;
 }
+
+/**
+ * Splits text into natural sentence-level utterances for pipelined TTS playback.
+ * Sentences under minChars are merged with adjacent text to avoid choppy micro-clips.
+ * 
+ * @param {string} text - Clean speech text
+ * @param {number} [maxCharsPerChunk=140] - Target max chunk length
+ * @param {number} [minCharsPerChunk=25] - Minimum chunk length before merging
+ * @returns {Array<string>} Array of sentence chunks ready for queued TTS
+ */
+export function splitSentencesForSpeech(text, maxCharsPerChunk = 140, minCharsPerChunk = 25) {
+  if (!text || typeof text !== "string") return [];
+  const clean = text.trim();
+  if (!clean) return [];
+  if (clean.length <= maxCharsPerChunk) return [clean];
+
+  const rawSentences = clean.split(/(?<=[.!?])\s+/);
+  const chunks = [];
+  let buffer = "";
+
+  for (const s of rawSentences) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+
+    if (!buffer) {
+      buffer = trimmed;
+    } else if ((buffer.length + 1 + trimmed.length) <= maxCharsPerChunk) {
+      buffer += " " + trimmed;
+    } else {
+      if (buffer.length >= minCharsPerChunk) {
+        chunks.push(buffer);
+        buffer = trimmed;
+      } else {
+        buffer += " " + trimmed;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    chunks.push(buffer.trim());
+  }
+
+  return chunks.length > 0 ? chunks : [clean];
+}
+

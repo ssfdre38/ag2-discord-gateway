@@ -457,13 +457,23 @@ export function createDiscordBot() {
     // ─── Voice Channel Live Auto-Read ─────────────────────────────────────────
     if (!message.author.bot && message.guildId && voiceManager.getStatus(message.guildId).connected) {
       if (voiceManager.isAutoReadEnabled(message.guildId, message.channelId)) {
-        const rawContent = message.content.trim();
-        if (!rawContent.startsWith("!") && !rawContent.startsWith("/")) {
-          const speechSnippet = formatSpeakerSnippet(authorName, rawContent, config.voiceAutoReadMaxChars);
-          if (speechSnippet) {
-            voiceManager.speakText(message.guildId, speechSnippet).catch(vErr => {
-              console.warn(`[Voice AutoRead] ${vErr.message}`);
-            });
+        const memberVoiceChannel = message.member?.voice?.channel;
+        const botVoiceChannel = message.guild?.members?.me?.voice?.channel;
+        const isAuthorInVoice = memberVoiceChannel && botVoiceChannel && memberVoiceChannel.id === botVoiceChannel.id;
+
+        if (config.voiceAutoReadMuteInVoice && isAuthorInVoice) {
+          // Suppress: author is already in voice channel with Ash, avoid echo
+        } else {
+          const rawContent = message.content.trim();
+          if (!rawContent.startsWith("!") && !rawContent.startsWith("/")) {
+            const speechSnippet = formatSpeakerSnippet(authorName, rawContent, config.voiceAutoReadMaxChars);
+            if (speechSnippet) {
+              voiceManager.speakText(message.guildId, speechSnippet, {
+                voice: config.voiceAutoReadVoice || "Zoey"
+              }).catch(vErr => {
+                console.warn(`[Voice AutoRead] ${vErr.message}`);
+              });
+            }
           }
         }
       }
@@ -1538,7 +1548,9 @@ export function createDiscordBot() {
             if (message.guildId && voiceManager.getStatus(message.guildId).connected && voiceManager.isVoiceTalkBackEnabled(message.guildId)) {
               const spokenReply = cleanTextForSpeech(finalClean, config.voiceTalkBackMaxChars);
               if (spokenReply) {
-                voiceManager.speakText(message.guildId, spokenReply).catch(vErr => {
+                voiceManager.speakText(message.guildId, spokenReply, {
+                  voice: config.ollamaVoiceName || "Harper"
+                }).catch(vErr => {
                   console.warn(`[Voice TalkBack] Notice: ${vErr.message}`);
                 });
               }

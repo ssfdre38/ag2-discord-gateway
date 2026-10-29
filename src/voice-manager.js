@@ -24,6 +24,7 @@ import http from "http";
 import prism from "prism-media";
 import { config } from "./config.js";
 import { getBarrerVmcBridge } from "./barrer-bridge.js";
+import { splitSentencesForSpeech } from "./text-chunker.js";
 
 function pcmToWav(pcmBuffer, sampleRate = 48000, numChannels = 2) {
   const byteRate = sampleRate * numChannels * 2;
@@ -96,6 +97,8 @@ export class VoiceManager extends EventEmitter {
     this.ollamaVoiceName = options.ollamaVoiceName || config.ollamaVoiceName || "Harper";
     this.enableOllamaVoice = options.enableOllamaVoice !== false && config.enableOllamaVoice !== false;
     this.enableVoiceFallback = options.enableVoiceFallback ?? config.enableVoiceFallback ?? false;
+    this.voiceSentenceChunking = options.voiceSentenceChunking ?? config.voiceSentenceChunking ?? true;
+    this.voiceBargeIn = options.voiceBargeIn ?? config.voiceBargeIn ?? true;
     this.tempAudioDir = options.tempAudioDir || path.resolve(process.cwd(), "data", "temp_audio");
     this.connections = new Map(); // guildId -> connection
     this.players = new Map();     // guildId -> audioPlayer
@@ -291,6 +294,12 @@ export class VoiceManager extends EventEmitter {
     const activeUsers = new Set();
 
     connection.receiver.speaking.on("start", (userId) => {
+      // Barge-in: if bot is currently speaking and a human starts talking, stop playback immediately
+      if (this.voiceBargeIn && this.isPlaying.get(guildId)) {
+        console.log(`[Voice Barge-In] User ${userId} started speaking; interrupting bot playback`);
+        this.clearQueue(guildId);
+      }
+
       if (!this.isVoiceListenEnabled(guildId)) return;
       if (activeUsers.has(userId)) return;
 
@@ -513,18 +522,44 @@ export class VoiceManager extends EventEmitter {
       return { success: false, reason: "empty_text" };
     }
 
-    return new Promise((resolve, reject) => {
-      if (!this.speechQueues.has(guildId)) {
-        this.speechQueues.set(guildId, []);
-      }
-      this.speechQueues.get(guildId).push({
-        text: text.trim(),
-        options,
-        resolve,
-        reject
+    const trimmed = text.trim();
+    const shouldChunk = this.voiceSentenceChunking && options.chunking !== false;
+    const utterances = shouldChunk ? splitSentencesForSpeech(trimmed, 140, 25) : [trimmed];
+
+    if (!this.speechQueues.has(guildId)) {
+      this.speechQueues.set(guildId, []);
+    }
+
+    if (utterances.length <= 1) {
+      return new Promise((resolve, reject) => {
+        this.speechQueues.get(guildId).push({
+          text: utterances[0],
+          options,
+          resolve,
+          reject
+        });
+        this._processQueue(guildId);
       });
-      this._processQueue(guildId);
+    }
+
+    const promises = utterances.map((u) => {
+      return new Promise((resolve, reject) => {
+        this.speechQueues.get(guildId).push({
+          text: u,
+          options,
+          resolve,
+          reject
+        });
+      });
     });
+
+    this._processQueue(guildId);
+    return Promise.all(promises).then((results) => ({
+      success: true,
+      guildId,
+      utteranceCount: results.length,
+      status: "PLAYED"
+    }));
   }
 
   /**

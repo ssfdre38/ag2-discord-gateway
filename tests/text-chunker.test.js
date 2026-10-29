@@ -1,5 +1,5 @@
 import assert from "assert";
-import { splitDiscordMessage } from "../src/text-chunker.js";
+import { splitDiscordMessage, splitSentencesForSpeech } from "../src/text-chunker.js";
 
 console.log("=======================================================");
 console.log("   🧪 AG2 DISCORD GATEWAY // TEXT CHUNKER TEST");
@@ -88,6 +88,24 @@ function run() {
     for (const c of chunks) {
       assert.ok(c.length <= 100);
     }
+  });
+
+  it("splitSentencesForSpeech splits clean prose into natural sentence chunks", () => {
+    const s1 = "Honestly, Harper feels remarkably natural to me—grounded, sharp, and expressive without sounding robotic.";
+    const s2 = "We can always dial in the EQ warmth or pacing if you notice anything off, but as a core identity, this baseline feels just right.";
+    const full = `${s1} ${s2}`;
+
+    const chunks = splitSentencesForSpeech(full, 140, 25);
+    assert.strictEqual(chunks.length, 2);
+    assert.strictEqual(chunks[0], s1);
+    assert.strictEqual(chunks[1], s2);
+  });
+
+  it("splitSentencesForSpeech merges micro-sentences under minChars", () => {
+    const text = "Yes. That works well. Let's do it right now.";
+    const chunks = splitSentencesForSpeech(text, 140, 25);
+    assert.strictEqual(chunks.length, 1);
+    assert.strictEqual(chunks[0], text);
   });
 
   console.log("\n=======================================================");
