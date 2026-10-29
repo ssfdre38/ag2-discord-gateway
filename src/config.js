@@ -114,6 +114,11 @@ export const config = {
   voiceAutoReadMaxChars: parseInt(process.env.VOICE_AUTO_READ_MAX_CHARS || "200", 10),
   voiceTalkBackMaxChars: parseInt(process.env.VOICE_TALK_BACK_MAX_CHARS || "220", 10),
 
+  // Voice Activity Detection (VAD) & Noise Gate Tuning
+  voiceSilenceDurationMs: parseInt(process.env.VOICE_SILENCE_DURATION_MS || "1500", 10),
+  voiceNoiseGateRms: parseInt(process.env.VOICE_NOISE_GATE_RMS || "350", 10),
+  voiceMinDurationMs: parseInt(process.env.VOICE_MIN_DURATION_MS || "700", 10),
+
   // Cognitive Heartbeat (Ambient Consciousness Loop)
   enableHeartbeat: process.env.ENABLE_HEARTBEAT !== "false",
   heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || "60000", 10),

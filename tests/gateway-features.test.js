@@ -23,7 +23,7 @@ import {
   createVaultSaveModal,
   getSlashCommandDefinitions
 } from "../src/interactions.js";
-import { VoiceManager } from "../src/voice-manager.js";
+import { VoiceManager, calculatePcmRms, isWhisperHallucination } from "../src/voice-manager.js";
 import { cleanTextForSpeech, formatSpeakerSnippet } from "../src/speech-cleaner.js";
 import { DiagramRenderer } from "../src/diagram-renderer.js";
 import { AgySessionManager } from "../src/agy-session.js";
@@ -305,6 +305,42 @@ async function run() {
     // Test clearing queue
     vm.clearQueue("guild-1");
     assert.strictEqual(vm.getStatus("guild-1").queueLength, 0);
+
+    // Verify VAD & noise gate configurations
+    assert.strictEqual(st.silenceDurationMs, 1500);
+    assert.strictEqual(st.noiseGateRms, 350);
+    assert.strictEqual(st.minDurationMs, 700);
+  });
+
+  it("calculatePcmRms accurately measures energy and silences zero-amplitude buffers", () => {
+    assert.strictEqual(calculatePcmRms(null), 0);
+    assert.strictEqual(calculatePcmRms(Buffer.alloc(0)), 0);
+
+    const silentBuf = Buffer.alloc(192000, 0);
+    assert.strictEqual(calculatePcmRms(silentBuf), 0);
+
+    const activeBuf = Buffer.alloc(192000);
+    for (let i = 0; i < activeBuf.length; i += 2) {
+      activeBuf.writeInt16LE(1000, i);
+    }
+    const rms = calculatePcmRms(activeBuf);
+    assert.ok(Math.abs(rms - 1000) < 0.1, `Expected ~1000 RMS, got ${rms}`);
+  });
+
+  it("isWhisperHallucination correctly filters low-SNR phantom artifacts while preserving real speech", () => {
+    // Phantom training artifacts on ambient noise (low RMS)
+    assert.strictEqual(isWhisperHallucination("Thank you.", 300), true);
+    assert.strictEqual(isWhisperHallucination("Thank you very much.", 350), true);
+    assert.strictEqual(isWhisperHallucination("Thanks for watching!", 400), true);
+    assert.strictEqual(isWhisperHallucination("Bye bye.", 200), true);
+    assert.strictEqual(isWhisperHallucination("Subtitles by the Amara community", 350), true);
+    assert.strictEqual(isWhisperHallucination("Please subscribe", 300), true);
+    assert.strictEqual(isWhisperHallucination("you you you", 250), true);
+
+    // Legitimate human speech (high RMS)
+    assert.strictEqual(isWhisperHallucination("Thank you.", 2500), false);
+    assert.strictEqual(isWhisperHallucination("Thanks for watching", 3000), false);
+    assert.strictEqual(isWhisperHallucination("Good morning Ash, can you check the server?", 400), false);
   });
 
   // ─── 4. SPEECH CLEANER SANITIZATION TESTS ──────────────────────────────
