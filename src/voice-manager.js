@@ -92,7 +92,7 @@ export class VoiceManager extends EventEmitter {
     super();
     this.speechBinPath = options.speechBinPath || config.speechBinPath || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe";
     this.ollamaVoiceUrl = options.ollamaVoiceUrl || config.ollamaVoiceUrl || "http://127.0.0.1:11435";
-    this.ollamaVoiceModel = options.ollamaVoiceModel || config.ollamaVoiceModel || "phonon:en";
+    this.ollamaVoiceModel = options.ollamaVoiceModel || config.ollamaVoiceModel || "phonon:ash";
     this.ollamaVoiceName = options.ollamaVoiceName || config.ollamaVoiceName || "Harper";
     this.enableOllamaVoice = options.enableOllamaVoice !== false && config.enableOllamaVoice !== false;
     this.tempAudioDir = options.tempAudioDir || path.resolve(process.cwd(), "data", "temp_audio");
@@ -553,9 +553,10 @@ export class VoiceManager extends EventEmitter {
 
     // 2. Fallback: speech_helper.exe
     return new Promise((resolve, reject) => {
+      const fallbackVoice = options.fallbackVoice || "Zira";
       execFile(
         this.speechBinPath,
-        ["wav", text, targetWav, String(rate), String(volume), voice],
+        ["wav", text, targetWav, String(rate), String(volume), fallbackVoice],
         { timeout: 20000 },
         (err) => {
           if (err || !fs.existsSync(targetWav)) {
@@ -654,7 +655,7 @@ export class VoiceManager extends EventEmitter {
       return;
     }
 
-    const voice = item.options.voice || "Zira";
+    const voice = item.options.voice || this.ollamaVoiceName || "Harper";
     const rate = item.options.rate ?? 1;
     const volume = item.options.volume ?? 100;
     const tempWav = path.join(this.tempAudioDir, `voice_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`);
