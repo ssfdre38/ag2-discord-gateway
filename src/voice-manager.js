@@ -93,6 +93,7 @@ export class VoiceManager extends EventEmitter {
     this.speechBinPath = options.speechBinPath || config.speechBinPath || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe";
     this.ollamaVoiceUrl = options.ollamaVoiceUrl || config.ollamaVoiceUrl || "http://127.0.0.1:11435";
     this.ollamaVoiceModel = options.ollamaVoiceModel || config.ollamaVoiceModel || "phonon:en";
+    this.ollamaVoiceName = options.ollamaVoiceName || config.ollamaVoiceName || "Harper";
     this.enableOllamaVoice = options.enableOllamaVoice !== false && config.enableOllamaVoice !== false;
     this.tempAudioDir = options.tempAudioDir || path.resolve(process.cwd(), "data", "temp_audio");
     this.connections = new Map(); // guildId -> connection
@@ -575,7 +576,7 @@ export class VoiceManager extends EventEmitter {
       const payload = JSON.stringify({
         model: options.model || this.ollamaVoiceModel || "phonon:en",
         input: text,
-        voice: options.voice || "default",
+        voice: options.voice || this.ollamaVoiceName || "Harper",
         response_format: "wav"
       });
 

@@ -86,6 +86,7 @@ export const config = {
   speechBinPath: process.env.SPEECH_HELPER_PATH || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe",
   ollamaVoiceUrl: process.env.OLLAMA_VOICE_URL || "http://127.0.0.1:11435",
   ollamaVoiceModel: process.env.OLLAMA_VOICE_MODEL || "phonon:en",
+  ollamaVoiceName: process.env.OLLAMA_VOICE_NAME || "Harper",
   enableOllamaVoice: process.env.ENABLE_OLLAMA_VOICE !== "false",
   enableAutonomousReactions: process.env.ENABLE_AUTONOMOUS_REACTIONS !== "false",
   enableAutoThreads: process.env.ENABLE_AUTO_THREADS !== "false",
