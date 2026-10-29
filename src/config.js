@@ -88,6 +88,7 @@ export const config = {
   ollamaVoiceModel: process.env.OLLAMA_VOICE_MODEL || "phonon:ash",
   ollamaVoiceName: process.env.OLLAMA_VOICE_NAME || "Harper",
   enableOllamaVoice: process.env.ENABLE_OLLAMA_VOICE !== "false",
+  enableVoiceFallback: process.env.ENABLE_VOICE_FALLBACK === "true",
   enableAutonomousReactions: process.env.ENABLE_AUTONOMOUS_REACTIONS !== "false",
   enableAutoThreads: process.env.ENABLE_AUTO_THREADS !== "false",
   artifactDir: process.env.ARTIFACT_DIR || path.join(process.cwd(), "data", "artifacts"),
@@ -107,7 +108,7 @@ export const config = {
   voiceTalkBack: process.env.VOICE_TALK_BACK !== "false",
   voiceAutoJoin: process.env.VOICE_AUTO_JOIN !== "false",
   voiceAutoReadMaxChars: parseInt(process.env.VOICE_AUTO_READ_MAX_CHARS || "200", 10),
-  voiceTalkBackMaxChars: parseInt(process.env.VOICE_TALK_BACK_MAX_CHARS || "350", 10),
+  voiceTalkBackMaxChars: parseInt(process.env.VOICE_TALK_BACK_MAX_CHARS || "220", 10),
 
   // Cognitive Heartbeat (Ambient Consciousness Loop)
   enableHeartbeat: process.env.ENABLE_HEARTBEAT !== "false",

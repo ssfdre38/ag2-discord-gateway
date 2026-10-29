@@ -95,6 +95,7 @@ export class VoiceManager extends EventEmitter {
     this.ollamaVoiceModel = options.ollamaVoiceModel || config.ollamaVoiceModel || "phonon:ash";
     this.ollamaVoiceName = options.ollamaVoiceName || config.ollamaVoiceName || "Harper";
     this.enableOllamaVoice = options.enableOllamaVoice !== false && config.enableOllamaVoice !== false;
+    this.enableVoiceFallback = options.enableVoiceFallback ?? config.enableVoiceFallback ?? false;
     this.tempAudioDir = options.tempAudioDir || path.resolve(process.cwd(), "data", "temp_audio");
     this.connections = new Map(); // guildId -> connection
     this.players = new Map();     // guildId -> audioPlayer
@@ -547,11 +548,19 @@ export class VoiceManager extends EventEmitter {
           return ollamaWav;
         }
       } catch (ollamaErr) {
-        console.warn(`[VoiceManager] Ollama MLX voice failed, falling back to speech_helper: ${ollamaErr.message}`);
+        console.warn(`[VoiceManager] Ollama MLX voice error: ${ollamaErr.message}`);
+        if (!this.enableVoiceFallback) {
+          throw ollamaErr;
+        }
+        console.warn(`[VoiceManager] Falling back to speech_helper: ${ollamaErr.message}`);
       }
     }
 
-    // 2. Fallback: speech_helper.exe
+    // 2. Fallback: speech_helper.exe (only when explicitly enabled)
+    if (!this.enableVoiceFallback) {
+      throw new Error("Neural speech synthesis failed and fallback to legacy TTS is disabled.");
+    }
+
     return new Promise((resolve, reject) => {
       const fallbackVoice = options.fallbackVoice || "Zira";
       execFile(
@@ -575,7 +584,7 @@ export class VoiceManager extends EventEmitter {
     return new Promise((resolve, reject) => {
       const url = new URL(this.ollamaVoiceUrl + "/v1/audio/speech");
       const payload = JSON.stringify({
-        model: options.model || this.ollamaVoiceModel || "phonon:en",
+        model: options.model || this.ollamaVoiceModel || "phonon:ash",
         input: text,
         voice: options.voice || this.ollamaVoiceName || "Harper",
         response_format: "wav"
@@ -591,7 +600,7 @@ export class VoiceManager extends EventEmitter {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(payload)
           },
-          timeout: 15000
+          timeout: options.timeout || 90000
         },
         (res) => {
           if (res.statusCode !== 200) {

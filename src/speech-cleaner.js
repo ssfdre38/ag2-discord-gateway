@@ -29,8 +29,10 @@ export function cleanTextForSpeech(text, maxChars = 250) {
     .replace(/```[\s\S]*?```/g, " code block ")
     // 5. Remove inline code ticks
     .replace(/`([^`]+)`/g, "$1")
-    // 6. Remove internal tags like [ATTACH: ...], [ARTIFACT: ...], [REMEMBER: ...], [MEMORY: ...], [REACT: ...], [AUDIO: ...]
-    .replace(/\[(?:ATTACH|ATTACHMENT|ARTIFACT|REMEMBER|MEMORY|REACT|AUDIO|MUSIC|SFX|HEARTBEAT|SOUND|IMAGE_SD):[^\]]*\]/gi, "")
+    // 6. Remove internal tags like [ATTACH: ...], [ARTIFACT: ...], [REMEMBER: ...], [MEMORY: ...], [REACT: ...], [AUDIO: ...], [STATUS: ...]
+    .replace(/\[(?:ATTACH|ATTACHMENT|ARTIFACT|REMEMBER|MEMORY|REACT|AUDIO|MUSIC|SFX|HEARTBEAT|SOUND|IMAGE_SD|STATUS|ACTIVITY):[^\]]*\]/gi, "")
+    // 6b. Remove standalone silence and directive tokens
+    .replace(/\[(?:SILENT|NO_REPLY|PASS|SHH|IGNORE)\]/gi, "")
     // 7. Remove markdown headers (#, ##, etc.)
     .replace(/^#{1,6}\s+/gm, "")
     // 8. Remove markdown formatting characters (*, _, ~, >, #)
