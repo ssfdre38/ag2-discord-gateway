@@ -20,7 +20,9 @@ import { EventEmitter } from "events";
 import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
+import http from "http";
 import prism from "prism-media";
+import { config } from "./config.js";
 import { getBarrerVmcBridge } from "./barrer-bridge.js";
 
 function pcmToWav(pcmBuffer, sampleRate = 48000, numChannels = 2) {
@@ -88,7 +90,10 @@ function applyStudioWarmthFilter(inputWav, outputWav) {
 export class VoiceManager extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.speechBinPath = options.speechBinPath || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe";
+    this.speechBinPath = options.speechBinPath || config.speechBinPath || "C:\\Users\\admin\\source\\gemini-super-system\\tools\\speech_helper.exe";
+    this.ollamaVoiceUrl = options.ollamaVoiceUrl || config.ollamaVoiceUrl || "http://127.0.0.1:11435";
+    this.ollamaVoiceModel = options.ollamaVoiceModel || config.ollamaVoiceModel || "phonon:en";
+    this.enableOllamaVoice = options.enableOllamaVoice !== false && config.enableOllamaVoice !== false;
     this.tempAudioDir = options.tempAudioDir || path.resolve(process.cwd(), "data", "temp_audio");
     this.connections = new Map(); // guildId -> connection
     this.players = new Map();     // guildId -> audioPlayer
@@ -521,6 +526,113 @@ export class VoiceManager extends EventEmitter {
   }
 
   /**
+   * Synthesizes speech using local Ollama MLX speech runner (e.g. phonon:en / Kokoro)
+   * with seamless fallback to speech_helper.exe.
+   * @param {string} text - Text to synthesize
+   * @param {string} targetWav - Output file path
+   * @param {object} options - Voice options
+   * @returns {Promise<string>} Path to synthesized WAV file
+   */
+  async synthesizeWav(text, targetWav, options = {}) {
+    const voice = options.voice || "default";
+    const rate = options.rate ?? 1;
+    const volume = options.volume ?? 100;
+
+    // 1. Sovereign local Ollama MLX Speech Runner (sub-50ms TTFA, 24kHz neural speech)
+    if (this.enableOllamaVoice) {
+      try {
+        const ollamaWav = await this.synthesizeWithOllama(text, targetWav, options);
+        if (ollamaWav && fs.existsSync(ollamaWav) && fs.statSync(ollamaWav).size > 1000) {
+          return ollamaWav;
+        }
+      } catch (ollamaErr) {
+        console.warn(`[VoiceManager] Ollama MLX voice failed, falling back to speech_helper: ${ollamaErr.message}`);
+      }
+    }
+
+    // 2. Fallback: speech_helper.exe
+    return new Promise((resolve, reject) => {
+      execFile(
+        this.speechBinPath,
+        ["wav", text, targetWav, String(rate), String(volume), voice],
+        { timeout: 20000 },
+        (err) => {
+          if (err || !fs.existsSync(targetWav)) {
+            return reject(new Error(err?.message || "Failed to synthesize speech WAV file"));
+          }
+          resolve(targetWav);
+        }
+      );
+    });
+  }
+
+  /**
+   * Generates speech audio via Ollama /v1/audio/speech
+   */
+  async synthesizeWithOllama(text, targetWav, options = {}) {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.ollamaVoiceUrl + "/v1/audio/speech");
+      const payload = JSON.stringify({
+        model: options.model || this.ollamaVoiceModel || "phonon:en",
+        input: text,
+        voice: options.voice || "default",
+        response_format: "wav"
+      });
+
+      const req = http.request(
+        {
+          hostname: url.hostname,
+          port: url.port || 11435,
+          path: url.pathname,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload)
+          },
+          timeout: 15000
+        },
+        (res) => {
+          if (res.statusCode !== 200) {
+            return reject(new Error(`Ollama speech HTTP status ${res.statusCode}`));
+          }
+          const chunks = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => {
+            const buffer = Buffer.concat(chunks);
+            if (buffer.length < 44) {
+              return reject(new Error("Ollama returned invalid WAV payload"));
+            }
+
+            // Write and patch RIFF header duration
+            fs.writeFileSync(targetWav, buffer);
+            try {
+              const fileLen = buffer.length;
+              const dataLen = fileLen - 44;
+              const fd = fs.openSync(targetWav, "r+");
+              const patchBuf = Buffer.alloc(4);
+              patchBuf.writeUInt32LE(fileLen - 8, 0);
+              fs.writeSync(fd, patchBuf, 0, 4, 4);
+              patchBuf.writeUInt32LE(dataLen, 0);
+              fs.writeSync(fd, patchBuf, 0, 4, 40);
+              fs.closeSync(fd);
+            } catch {}
+
+            resolve(targetWav);
+          });
+        }
+      );
+
+      req.on("error", (e) => reject(e));
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("Ollama speech request timed out"));
+      });
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  /**
    * Internal worker loop that plays queued speech items sequentially.
    * @private
    */
@@ -547,20 +659,8 @@ export class VoiceManager extends EventEmitter {
     const tempWav = path.join(this.tempAudioDir, `voice_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`);
 
     try {
-      // Synthesize WAV via speech_helper.exe
-      await new Promise((resolveWav, rejectWav) => {
-        execFile(
-          this.speechBinPath,
-          ["wav", item.text, tempWav, String(rate), String(volume), voice],
-          { timeout: 20000 },
-          (err) => {
-            if (err || !fs.existsSync(tempWav)) {
-              return rejectWav(new Error(err?.message || "Failed to synthesize speech WAV file"));
-            }
-            resolveWav(tempWav);
-          }
-        );
-      });
+      // Synthesize WAV via Ollama MLX speech runner (with speech_helper fallback)
+      await this.synthesizeWav(item.text, tempWav, { voice, rate, volume });
 
       // Apply studio DSP warmth & vocal leveling for rich broadcast audio
       const enhancedWav = path.join(this.tempAudioDir, `enhanced_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`);
