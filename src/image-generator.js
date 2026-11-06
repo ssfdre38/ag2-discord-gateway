@@ -151,6 +151,7 @@ export class ImageGenerator {
     let engine = "auto";
     let width = undefined;
     let height = undefined;
+    let negativePrompt = undefined;
 
     for (let i = 1; i < parts.length; i++) {
       const p = parts[i].toLowerCase();
@@ -164,6 +165,8 @@ export class ImageGenerator {
         engine = p.split("=")[1].trim();
       } else if (p.startsWith("style=")) {
         style = parts[i].slice(parts[i].indexOf("=") + 1).trim();
+      } else if (p.startsWith("neg=") || p.startsWith("negative=")) {
+        negativePrompt = parts[i].slice(parts[i].indexOf("=") + 1).trim();
       } else if (p.startsWith("size=") || p.startsWith("dim=")) {
         const dims = p.split("=")[1].split("x");
         if (dims.length === 2) {
@@ -176,7 +179,7 @@ export class ImageGenerator {
       }
     }
 
-    return { prompt, style, engine, width, height };
+    return { prompt, style, engine, width, height, negativePrompt };
   }
 
   /**
@@ -465,6 +468,11 @@ export class ImageGenerator {
       "-H", String(height),
       "-o", targetPath
     ];
+
+    const negativePrompt = options.negativePrompt || options.neg || "bad anatomy, bad hands, extra limbs, deformed, disfigured, blurry, low quality, artifact, duplicate, mutated, plastic, wax";
+    if (negativePrompt) {
+      args.push("-n", negativePrompt);
+    }
 
     if (this.sdTaesdPath && fs.existsSync(this.sdTaesdPath)) {
       args.push("--taesd", this.sdTaesdPath);

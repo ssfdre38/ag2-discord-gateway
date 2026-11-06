@@ -5,6 +5,335 @@ import path from "path";
 import crypto from "crypto";
 import { config } from "./config.js";
 
+/**
+ * ══════════════════════════════════════════════════════════════════════
+ * ⚡ AG2 PERSISTENT WORKER (STREAM-JSON RESIDENT DAEMON)
+ * Keeps a single warm agy.exe process running indefinitely per session,
+ * piping turns via stdin NDJSON without process exit.
+ * Preserves subagents, background jobs, timers, and scheduled tasks!
+ * ══════════════════════════════════════════════════════════════════════
+ */
+export class AgyPersistentWorker {
+  constructor(options = {}) {
+    this.id = options.id || crypto.randomUUID();
+    this.agyPath = options.agyPath || config.agyPath;
+    this.sessionId = options.sessionId || null;
+    this.cwd = options.cwd || process.cwd();
+    this.isAdmin = Boolean(options.isAdmin);
+    this.isCollaborator = Boolean(options.isCollaborator);
+    this.collaboratorProjects = options.collaboratorProjects || [];
+    this.manager = options.manager || null;
+
+    this.child = null;
+    this.rl = null;
+    this.pid = null;
+    this.isReady = false;
+    this.isBusy = false;
+    this.isClosed = false;
+    this.conversationId = this.sessionId;
+    this.startedAt = Date.now();
+    this.lastActivity = Date.now();
+
+    this.currentTurn = null;
+    this.turnQueue = [];
+
+    this._start();
+  }
+
+  _start() {
+    const args = [
+      "--input-format", "stream-json",
+      "--output-format", "stream-json"
+    ];
+
+    if (this.sessionId) {
+      args.push("--conversation", this.sessionId);
+    }
+
+    if (this.isAdmin || (this.isCollaborator && this.collaboratorProjects.length > 0)) {
+      args.push("--dangerously-skip-permissions");
+    }
+
+    console.log(`[AG2 Daemon Worker] Spawning persistent resident CLI (Session: ${this.sessionId || "fresh"}, CWD: ${this.cwd})...`);
+
+    this.child = spawn(this.agyPath, args, {
+      cwd: this.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true
+    });
+
+    this.pid = this.child.pid;
+    console.log(`[AG2 Daemon Worker] Resident process spawned (PID: ${this.pid})`);
+
+    this.rl = readline.createInterface({
+      input: this.child.stdout,
+      terminal: false
+    });
+
+    this.rl.on("line", (line) => {
+      this.lastActivity = Date.now();
+      if (!line.trim()) return;
+
+      try {
+        const event = JSON.parse(line.trim());
+
+        if (event.event === "init") {
+          this.isReady = true;
+          if (event.conversation_id) {
+            this.conversationId = event.conversation_id;
+            console.log(`[AG2 Daemon Worker] Ready! Bound conversation: ${this.conversationId} (PID: ${this.pid})`);
+            if (this.manager && this.currentTurn) {
+              const opts = this.currentTurn.options || {};
+              const auth = this.currentTurn.author || {};
+              if (opts.isThread && opts.threadId) {
+                this.manager.threadSessions.set(opts.threadId, this.conversationId);
+                this.manager._saveSessions();
+              } else if (auth.isAdmin) {
+                this.manager.adminConversationId = this.conversationId;
+              } else if (auth.id && auth.id !== "unknown_legacy_id") {
+                if (this.conversationId !== this.manager.adminConversationId) {
+                  this.manager.userSessions.set(auth.id, this.conversationId);
+                  this.manager._saveSessions();
+                }
+              }
+            }
+          }
+          this._processNextInQueue();
+          return;
+        }
+
+        if (this.currentTurn) {
+          this.currentTurn.handleEvent(event);
+        }
+      } catch {
+        // Non-JSON log lines
+      }
+    });
+
+    this.child.stderr.on("data", (chunk) => {
+      this.lastActivity = Date.now();
+      const errText = chunk.toString().trim();
+      if (errText) {
+        console.warn(`[AG2 Daemon Worker stderr] ${errText}`);
+      }
+    });
+
+    this.child.on("error", (err) => {
+      console.error(`[AG2 Daemon Worker error] PID ${this.pid} error: ${err.message}`);
+      this.isClosed = true;
+      if (this.currentTurn) {
+        this.currentTurn.handleError(err);
+      }
+    });
+
+    this.child.on("close", (code) => {
+      console.log(`[AG2 Daemon Worker] Resident process PID ${this.pid} exited (code: ${code})`);
+      this.isReady = false;
+      this.isBusy = false;
+      this.isClosed = true;
+      if (this.currentTurn) {
+        this.currentTurn.handleClose(code);
+      }
+      while (this.turnQueue.length > 0) {
+        const pending = this.turnQueue.shift();
+        pending.handleClose(code);
+      }
+    });
+  }
+
+  _processNextInQueue() {
+    if (!this.isReady || this.isBusy || this.turnQueue.length === 0) return;
+    const next = this.turnQueue.shift();
+    this.isBusy = true;
+    this.currentTurn = next;
+    next.start();
+  }
+
+  async *executeTurn(prompt, options = {}, author = {}) {
+    if (this.isClosed) {
+      throw new Error(`Worker PID ${this.pid} is closed.`);
+    }
+
+    let turnResolve;
+    let turnReject;
+    const completionPromise = new Promise((res, rej) => {
+      turnResolve = res;
+      turnReject = rej;
+    });
+
+    const tokenQueue = [];
+    let notifyAvailableTokens = null;
+    let turnEnded = false;
+    let turnError = null;
+
+    const pushItem = (item) => {
+      tokenQueue.push(item);
+      if (notifyAvailableTokens) {
+        notifyAvailableTokens();
+        notifyAvailableTokens = null;
+      }
+    };
+
+    const executedTools = [];
+    let fullResponse = "";
+    let hasYieldedAny = false;
+
+    const INACTIVITY_TIMEOUT_MS = config.inactivityTimeoutMs || 300000;
+    const MAX_WALL_CLOCK_TIMEOUT_MS = options.isGoal ? 7200000 : (config.maxWallClockTimeoutMs || 3600000);
+
+    let inactivityTimer = null;
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        console.warn(`[AG2 Daemon Worker] Turn inactive for ${INACTIVITY_TIMEOUT_MS / 1000}s with no output, terminating resident worker (PID: ${this.pid})...`);
+        this.interrupt();
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    const maxWallClockTimer = setTimeout(() => {
+      console.warn(`[AG2 Daemon Worker] Turn reached maximum wall-clock ceiling of ${MAX_WALL_CLOCK_TIMEOUT_MS / 1000}s, terminating resident worker (PID: ${this.pid})...`);
+      this.interrupt();
+    }, MAX_WALL_CLOCK_TIMEOUT_MS);
+
+    resetInactivityTimer();
+
+    const endTurn = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      if (maxWallClockTimer) clearTimeout(maxWallClockTimer);
+      turnEnded = true;
+      if (notifyAvailableTokens) {
+        notifyAvailableTokens();
+        notifyAvailableTokens = null;
+      }
+      this.isBusy = false;
+      this.currentTurn = null;
+      this._processNextInQueue();
+    };
+
+    const turnTask = {
+      options,
+      author,
+      start: () => {
+        try {
+          if (!this.child || !this.child.stdin || this.child.stdin.destroyed) {
+            throw new Error(`Worker stdin is not writable (PID: ${this.pid})`);
+          }
+          const payload = JSON.stringify({
+            event: "user",
+            message: { content: prompt }
+          }) + "\n";
+          this.child.stdin.write(payload);
+        } catch (err) {
+          turnError = err;
+          endTurn();
+          turnReject(err);
+        }
+      },
+      handleEvent: (event) => {
+        resetInactivityTimer();
+
+        if (event.event === "step_update" && event.step_update) {
+          const update = event.step_update;
+
+          const toolName = update.tool_name || update.tool_call?.name || update.call?.name || update.name;
+          if (toolName) {
+            executedTools.push(toolName);
+            if (typeof options.onProgress === "function" && !hasYieldedAny) {
+              const readable = formatOperationalStatus(update);
+              try { options.onProgress(readable, toolName, executedTools.length); } catch {}
+            }
+          }
+
+          if (update.step_type === "agent_response" && update.text_delta) {
+            if (!update.text_delta.includes("(Done - no text output)")) {
+              hasYieldedAny = true;
+              fullResponse += update.text_delta;
+              pushItem({ delta: update.text_delta });
+            }
+          }
+        }
+
+        if (event.event === "result") {
+          let finalResp = event.result?.response || "";
+          if (finalResp.includes("(Done - no text output)") || finalResp.trim() === "(Done - no text output)") {
+            finalResp = "";
+          }
+          if (!hasYieldedAny && finalResp) {
+            hasYieldedAny = true;
+            fullResponse += finalResp;
+            pushItem({ delta: finalResp });
+          }
+          endTurn();
+          turnResolve();
+        }
+      },
+      handleClose: (code) => {
+        turnError = new Error(`Resident worker process closed (PID: ${this.pid}, code: ${code})`);
+        endTurn();
+        turnReject(turnError);
+      },
+      handleError: (err) => {
+        turnError = err;
+        endTurn();
+        turnReject(err);
+      }
+    };
+
+    this.turnQueue.push(turnTask);
+    this._processNextInQueue();
+
+    try {
+      while (!turnEnded || tokenQueue.length > 0) {
+        if (tokenQueue.length === 0) {
+          await new Promise((res) => { notifyAvailableTokens = res; });
+        }
+        while (tokenQueue.length > 0) {
+          const item = tokenQueue.shift();
+          if (item.delta) {
+            yield item.delta;
+          }
+        }
+      }
+
+      await completionPromise;
+
+      if (!hasYieldedAny || fullResponse.trim() === "(Done - no text output)" || fullResponse.trim().length === 0) {
+        if (executedTools.length > 0) {
+          const uniqueTools = [...new Set(executedTools)];
+          yield `✅ **Task Completed**: Actions executed: \`${uniqueTools.join("`, `")}\`.`;
+        } else {
+          yield "✅ **Done!** Let me know if you need anything else.";
+        }
+      }
+    } finally {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      if (maxWallClockTimer) clearTimeout(maxWallClockTimer);
+    }
+  }
+
+  interrupt() {
+    try {
+      if (process.platform === "win32" && this.pid) {
+        execFile("taskkill", ["/PID", String(this.pid), "/T", "/F"], () => {});
+      } else if (this.child) {
+        this.child.kill("SIGINT");
+      }
+    } catch {}
+    this.close();
+  }
+
+  close() {
+    this.isClosed = true;
+    this.isReady = false;
+    this.isBusy = false;
+    try {
+      if (this.child && !this.child.killed) {
+        this.child.kill();
+      }
+    } catch {}
+  }
+}
+
 export class AgySessionManager {
   constructor() {
     this.agyPath = config.agyPath;
@@ -20,8 +349,12 @@ export class AgySessionManager {
     this.channelSessions = new Map();
 
     // Active process tracking for in-flight turn cancellation
-    // Map<runKey, { child, pid, author, sessionId, startedAt, prompt, options }>
+    // Map<runKey, { child, pid, author, sessionId, startedAt, prompt, options, worker }>
     this.activeRuns = new Map();
+
+    // Resident persistent daemon workers
+    // Map<workerKey, AgyPersistentWorker>
+    this.workers = new Map();
 
     // Channel-to-Workspace mapping
     this.workspaceMap = new Map();
@@ -34,6 +367,12 @@ export class AgySessionManager {
     // Persistent disk storage path for session UUID mapping
     this.sessionsFilePath = path.join(process.cwd(), "data", "sessions.json");
     this._loadSessions();
+
+    // Gracefully clean up any resident workers on process termination
+    this._exitCleanup = () => this.closeAllWorkers();
+    process.once("exit", this._exitCleanup);
+    process.once("SIGINT", this._exitCleanup);
+    process.once("SIGTERM", this._exitCleanup);
   }
 
   /**
@@ -69,6 +408,52 @@ export class AgySessionManager {
   }
 
   /**
+   * Retrieves or instantiates a persistent resident worker for a given key.
+   * @param {string} workerKey
+   * @param {Object} options
+   * @returns {AgyPersistentWorker}
+   */
+  getOrCreateWorker(workerKey, options = {}) {
+    const existing = this.workers.get(workerKey);
+    if (existing && !existing.isClosed) {
+      if (existing.cwd === options.cwd && existing.isAdmin === options.isAdmin) {
+        return existing;
+      }
+      existing.close();
+      this.workers.delete(workerKey);
+    }
+
+    const worker = new AgyPersistentWorker({
+      id: workerKey,
+      agyPath: this.agyPath,
+      sessionId: options.sessionId,
+      cwd: options.cwd,
+      isAdmin: options.isAdmin,
+      isCollaborator: options.isCollaborator,
+      collaboratorProjects: options.collaboratorProjects,
+      manager: this
+    });
+
+    this.workers.set(workerKey, worker);
+    return worker;
+  }
+
+  /**
+   * Gracefully closes and disposes all resident daemon workers.
+   */
+  closeAllWorkers() {
+    if (this.workers.size > 0) {
+      console.log(`[AG2 Session] Gracefully terminating ${this.workers.size} resident CLI daemon workers...`);
+      for (const [key, worker] of this.workers.entries()) {
+        try {
+          worker.close();
+        } catch {}
+      }
+      this.workers.clear();
+    }
+  }
+
+  /**
    * Interrupts an in-flight turn execution by channel, thread, or session ID.
    * @param {string} [targetKey] - Channel ID, thread ID, or session ID
    * @returns {Object} Result of cancellation
@@ -88,11 +473,16 @@ export class AgySessionManager {
   _killRun(key, run) {
     try {
       const elapsedMs = Date.now() - run.startedAt;
-      if (process.platform === "win32" && run.pid) {
+      if (run.worker && typeof run.worker.interrupt === "function") {
+        run.worker.interrupt();
+        this.workers.delete(run.sessionId || key);
+      }
+      if (run.child && typeof run.child.kill === "function") {
+        try { run.child.kill("SIGINT"); } catch {}
+      }
+      if (process.platform === "win32" && run.pid && run.pid !== 999999) {
         // Force-terminate full process tree on Windows
         execFile("taskkill", ["/PID", String(run.pid), "/T", "/F"], () => {});
-      } else if (run.child) {
-        run.child.kill("SIGINT");
       }
       this.activeRuns.delete(key);
       console.log(`[AG2 Session] Interrupted active turn ${key} (PID: ${run.pid}) after ${(elapsedMs / 1000).toFixed(1)}s`);
@@ -264,9 +654,24 @@ export class AgySessionManager {
    */
   bindSession(conversationId, targetContext = null) {
     if (!targetContext || targetContext.isAdmin) {
+      if (this.adminConversationId && this.adminConversationId !== conversationId) {
+        const oldWorker = this.workers.get(this.adminConversationId);
+        if (oldWorker) {
+          oldWorker.close();
+          this.workers.delete(this.adminConversationId);
+        }
+      }
       this.adminConversationId = conversationId;
       console.log(`[AG2 Session] Bound admin sovereign session: ${conversationId}`);
     } else if (targetContext.isThread && targetContext.threadId) {
+      const oldId = this.threadSessions.get(targetContext.threadId);
+      if (oldId && oldId !== conversationId) {
+        const oldWorker = this.workers.get(oldId);
+        if (oldWorker) {
+          oldWorker.close();
+          this.workers.delete(oldId);
+        }
+      }
       this.threadSessions.set(targetContext.threadId, conversationId);
       this._saveSessions();
       console.log(`[AG2 Session] Bound thread ${targetContext.threadId} session: ${conversationId}`);
@@ -275,6 +680,14 @@ export class AgySessionManager {
       if (conversationId === this.adminConversationId) {
         console.warn(`[SECURITY ALERT] Blocked binding admin sovereign session to user ${targetContext.id}`);
         return;
+      }
+      const oldId = this.userSessions.get(targetContext.id);
+      if (oldId && oldId !== conversationId) {
+        const oldWorker = this.workers.get(oldId);
+        if (oldWorker) {
+          oldWorker.close();
+          this.workers.delete(oldId);
+        }
       }
       this.userSessions.set(targetContext.id, conversationId);
       this._saveSessions();
@@ -288,13 +701,36 @@ export class AgySessionManager {
    */
   resetSession(targetContext = null) {
     if (!targetContext || targetContext.isAdmin) {
+      if (this.adminConversationId) {
+        const oldWorker = this.workers.get(this.adminConversationId);
+        if (oldWorker) {
+          oldWorker.close();
+          this.workers.delete(this.adminConversationId);
+        }
+      }
       this.adminConversationId = config.conversationId || null;
       console.log(`[AG2 Session] Reset admin session to default: ${this.adminConversationId}`);
     } else if (targetContext.isThread && targetContext.threadId) {
+      const oldId = this.threadSessions.get(targetContext.threadId);
+      if (oldId) {
+        const oldWorker = this.workers.get(oldId);
+        if (oldWorker) {
+          oldWorker.close();
+          this.workers.delete(oldId);
+        }
+      }
       this.threadSessions.delete(targetContext.threadId);
       this._saveSessions();
       console.log(`[AG2 Session] Reset thread ${targetContext.threadId} session`);
     } else if (targetContext.id) {
+      const oldId = this.userSessions.get(targetContext.id);
+      if (oldId) {
+        const oldWorker = this.workers.get(oldId);
+        if (oldWorker) {
+          oldWorker.close();
+          this.workers.delete(oldId);
+        }
+      }
       this.userSessions.delete(targetContext.id);
       this._saveSessions();
       console.log(`[AG2 Session] Reset user ${targetContext.id} session`);
@@ -352,25 +788,10 @@ export class AgySessionManager {
   }
 
   /**
-   * Executes a turn in the AG2 session with user guardrails and streams tokens.
-   *
-   * @param {string} rawPrompt - The user text from Discord
-   * @param {Object|string} authorContextOrName - Discord author context or legacy username
-   * @param {Object|boolean} [optionsOrAdmin={}] - Execution options or legacy isAdmin boolean
-   * @returns {AsyncGenerator<string>} Token deltas
+   * Assembles the fully guarded prompt injection payload.
+   * @private
    */
-  async *runTurn(rawPrompt, authorContextOrName, optionsOrAdmin = {}) {
-    const author = this._normalizeAuthor(authorContextOrName, optionsOrAdmin);
-    const options = typeof optionsOrAdmin === "object" && optionsOrAdmin !== null ? optionsOrAdmin : {};
-    if (typeof optionsOrAdmin === "boolean") {
-      options.isAdmin = optionsOrAdmin;
-      author.isAdmin = optionsOrAdmin;
-    }
-
-    // Resolve isolated session ID for this specific author / thread
-    const sessionId = this.resolveSessionId(author, options);
-
-    // Build the guarded prompt
+  _buildGuardedPrompt(rawPrompt, author, options, sessionId) {
     const promptParts = [];
 
     if (config.systemPrompt) {
@@ -458,8 +879,90 @@ export class AgySessionManager {
       `• Status         : ${author.isAdmin ? "👑 Sovereign Administrator / Owner" : author.isCollaborator ? `🤝 Approved Project Collaborator (${author.collaboratorProjects.join(", ")})` : "👤 Community Member"}\n` +
       `[User Prompt]: ${rawPrompt}`
     );
-    const guardedPrompt = promptParts.join("\n\n");
 
+    return promptParts.join("\n\n");
+  }
+
+  /**
+   * Executes a turn in the AG2 session with user guardrails and streams tokens.
+   *
+   * @param {string} rawPrompt - The user text from Discord
+   * @param {Object|string} authorContextOrName - Discord author context or legacy username
+   * @param {Object|boolean} [optionsOrAdmin={}] - Execution options or legacy isAdmin boolean
+   * @returns {AsyncGenerator<string>} Token deltas
+   */
+  async *runTurn(rawPrompt, authorContextOrName, optionsOrAdmin = {}) {
+    const author = this._normalizeAuthor(authorContextOrName, optionsOrAdmin);
+    const options = typeof optionsOrAdmin === "object" && optionsOrAdmin !== null ? optionsOrAdmin : {};
+    if (typeof optionsOrAdmin === "boolean") {
+      options.isAdmin = optionsOrAdmin;
+      author.isAdmin = optionsOrAdmin;
+    }
+
+    // Resolve isolated session ID for this specific author / thread
+    const sessionId = this.resolveSessionId(author, options);
+    const guardedPrompt = this._buildGuardedPrompt(rawPrompt, author, options, sessionId);
+
+    const runKey = options.threadId || options.channelId || sessionId || `run_${Date.now()}`;
+    const targetCwd = this.getWorkspace(options.threadId || options.channelId);
+
+    const isDaemonEnabled = config.enablePersistentDaemon !== false;
+
+    if (isDaemonEnabled) {
+      const workerKey = author.isAdmin
+        ? (this.adminConversationId || "admin_sovereign")
+        : (sessionId || `session_${runKey}`);
+
+      try {
+        const worker = this.getOrCreateWorker(workerKey, {
+          sessionId,
+          cwd: targetCwd,
+          isAdmin: author.isAdmin,
+          isCollaborator: author.isCollaborator,
+          collaboratorProjects: author.collaboratorProjects
+        });
+
+        console.log(`\n[AG2 Session Turn (Persistent Daemon)]`);
+        console.log(`  Target Session : ${sessionId || "Dynamic Dedicated Session (Fresh)"}`);
+        console.log(`  Worker PID     : ${worker.pid}`);
+        console.log(`  Workspace Dir  : ${targetCwd}`);
+        console.log(`  Author         : @${author.username} (${author.id}) | Nick: "${author.displayName}" (Admin: ${author.isAdmin}, Collab: ${author.isCollaborator})`);
+        console.log(`  Prompt         : "${rawPrompt.slice(0, 70)}..."`);
+
+        this.activeRuns.set(runKey, {
+          child: worker.child,
+          pid: worker.pid,
+          author,
+          sessionId,
+          startedAt: Date.now(),
+          prompt: rawPrompt,
+          options,
+          worker
+        });
+
+        try {
+          for await (const chunk of worker.executeTurn(guardedPrompt, options, author)) {
+            yield chunk;
+          }
+        } finally {
+          this.activeRuns.delete(runKey);
+        }
+        return;
+      } catch (daemonErr) {
+        console.warn(`[AG2 Session] Persistent worker failed or crashed (${daemonErr.message}). Falling back to one-shot mode...`);
+        this.workers.delete(workerKey);
+      }
+    }
+
+    // Fallback: One-shot process spawn
+    yield* this._runTurnOneShot(rawPrompt, guardedPrompt, author, options, sessionId, runKey, targetCwd);
+  }
+
+  /**
+   * Fallback one-shot turn execution.
+   * @private
+   */
+  async *_runTurnOneShot(rawPrompt, guardedPrompt, author, options, sessionId, runKey, targetCwd) {
     const args = [
       "--print", guardedPrompt,
       "--output-format", "stream-json"
@@ -476,20 +979,14 @@ export class AgySessionManager {
       args.push("--conversation", sessionId);
     }
 
-    // Apply execution privileges based on verified administrator status OR approved collaborator
     if (author.isAdmin || (author.isCollaborator && author.collaboratorProjects.length > 0)) {
       args.push("--dangerously-skip-permissions");
     }
 
-    const runKey = options.threadId || options.channelId || sessionId || `run_${Date.now()}`;
-    const targetCwd = this.getWorkspace(options.threadId || options.channelId);
-
-    console.log(`\n[AG2 Session Turn]`);
+    console.log(`\n[AG2 Session Turn (One-Shot Mode)]`);
     console.log(`  Target Session : ${sessionId || "Dynamic Dedicated Session (Fresh)"}`);
     console.log(`  Workspace Dir  : ${targetCwd}`);
-    console.log(`  Author         : @${author.username} (${author.id}) | Nick: "${author.displayName}" (Admin: ${author.isAdmin}, Collab: ${author.isCollaborator}, Spoof: ${author.isImpersonating})`);
-    console.log(`  Security Mode  : ${author.isAdmin ? "Admin Full Access" : author.isCollaborator ? "Project Collaborator (Scoped Write)" : "Community Sandboxed (In-Chat Only)"}`);
-    console.log(`  Print Timeout  : ${printTimeoutSec === 0 ? "Unlimited (0s)" : `${printTimeoutSec}s`}`);
+    console.log(`  Author         : @${author.username} (${author.id}) | Nick: "${author.displayName}" (Admin: ${author.isAdmin})`);
     console.log(`  Prompt         : "${rawPrompt.slice(0, 70)}..."`);
 
     const child = spawn(this.agyPath, args, {
@@ -517,10 +1014,8 @@ export class AgySessionManager {
     let fullResponse = "";
     const executedTools = [];
 
-    // Activity-based watchdog: resets on ANY output (stdout/stderr) from child process
-    // An agent performing multi-step coding, file writes, or compilation remains alive as long as it's active.
-    const INACTIVITY_TIMEOUT_MS = config.inactivityTimeoutMs || 300000; // 5 mins of complete silence
-    const MAX_WALL_CLOCK_TIMEOUT_MS = options.isGoal ? 7200000 : (config.maxWallClockTimeoutMs || 3600000); // 2 hours for goals, 60 mins default
+    const INACTIVITY_TIMEOUT_MS = config.inactivityTimeoutMs || 300000;
+    const MAX_WALL_CLOCK_TIMEOUT_MS = options.isGoal ? 7200000 : (config.maxWallClockTimeoutMs || 3600000);
 
     let inactivityTimer = null;
     const resetInactivityTimer = () => {
@@ -566,7 +1061,6 @@ export class AgySessionManager {
               this.adminConversationId = newSessionId;
               console.log(`  Admin Session ID : ${newSessionId}`);
             } else if (author.id && author.id !== "unknown_legacy_id") {
-              // CRITICAL DEFENSE: A non-admin user can NEVER be assigned the admin's conversation ID!
               if (newSessionId !== this.adminConversationId) {
                 this.userSessions.set(author.id, newSessionId);
                 this._saveSessions();
@@ -580,7 +1074,6 @@ export class AgySessionManager {
           if (event.event === "step_update" && event.step_update) {
             const update = event.step_update;
 
-            // Track tool executions for transparent reporting
             const toolName = update.tool_name || update.tool_call?.name || update.call?.name || update.name;
             if (toolName) {
               executedTools.push(toolName);
@@ -615,8 +1108,6 @@ export class AgySessionManager {
         }
       }
 
-      // If the model completed tasks via tools or returned internal (Done - no text output),
-      // yield a clear completion report instead of returning silence or raw CLI noise.
       if (!hasYieldedAny || fullResponse.trim() === "(Done - no text output)" || fullResponse.trim().length === 0) {
         if (executedTools.length > 0) {
           const uniqueTools = [...new Set(executedTools)];

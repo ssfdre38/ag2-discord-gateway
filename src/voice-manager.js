@@ -17,7 +17,7 @@ import {
   entersState
 } from "@discordjs/voice";
 import { EventEmitter } from "events";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import http from "http";
@@ -187,6 +187,12 @@ export class VoiceManager extends EventEmitter {
     this.listenSettings = new Map();    // guildId -> boolean
 
     this.ensureTempDir();
+    this._isPrewarmed = false;
+    this._isEnsuringOllama = false;
+
+    if (this.enableOllamaVoice) {
+      this.ensureOllamaVoiceRunning().catch(() => {});
+    }
   }
 
   ensureTempDir() {
@@ -645,6 +651,116 @@ export class VoiceManager extends EventEmitter {
       utteranceCount: results.length,
       status: "PLAYED"
     }));
+  }
+
+  /**
+   * Health check to test if Ollama speech server is listening and healthy on ollamaVoiceUrl.
+   * @returns {Promise<boolean>}
+   */
+  async checkOllamaHealth() {
+    return new Promise((resolve) => {
+      try {
+        const url = new URL(this.ollamaVoiceUrl + "/api/tags");
+        const req = http.request(
+          {
+            hostname: url.hostname,
+            port: url.port || 11435,
+            path: url.pathname,
+            method: "GET",
+            timeout: 2000
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode === 200);
+          }
+        );
+        req.on("error", () => resolve(false));
+        req.on("timeout", () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.end();
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  /**
+   * Pre-warms the neural voice model by performing a tiny background synthesis request.
+   * This forces Ollama MLX to load the 188 model tensors into RAM so that subsequent utterances
+   * have zero cold-start delay (sub-50ms TTFA).
+   */
+  async prewarmOllamaVoice() {
+    if (this._isPrewarmed) return;
+    this._isPrewarmed = true;
+    try {
+      const warmupWav = path.join(this.tempAudioDir, "warmup.wav");
+      await this.synthesizeWithOllama(".", warmupWav, { timeout: 45000 });
+      console.log(`[VoiceManager] Neural voice model (${this.ollamaVoiceModel} / ${this.ollamaVoiceName}) pre-warmed into RAM.`);
+    } catch (err) {
+      console.warn(`[VoiceManager] Pre-warm notice: ${err.message}`);
+    }
+  }
+
+  /**
+   * Ensures the dedicated Ollama speech daemon is running on port 11435 and pre-warms the voice model.
+   * If down, spawns it as a detached background process with required MLX DLLs in PATH.
+   */
+  async ensureOllamaVoiceRunning() {
+    if (!this.enableOllamaVoice || this._isEnsuringOllama) return;
+    this._isEnsuringOllama = true;
+
+    try {
+      const alive = await this.checkOllamaHealth();
+      if (alive) {
+        this.prewarmOllamaVoice().catch(() => {});
+        return true;
+      }
+
+      console.log(`[VoiceManager] Dedicated Ollama speech daemon not detected on ${this.ollamaVoiceUrl}. Spawning...`);
+
+      const ollamaExe = "C:\\Users\\admin\\source\\ollama-main\\ollama.exe";
+      const libDir = "C:\\Users\\admin\\source\\ollama-main\\lib\\ollama";
+      const mlxDir = "C:\\Users\\admin\\source\\ollama-main\\lib\\ollama\\mlx";
+
+      if (!fs.existsSync(ollamaExe)) {
+        console.warn(`[VoiceManager] Cannot start Ollama: executable not found at ${ollamaExe}`);
+        return false;
+      }
+
+      const env = {
+        ...process.env,
+        PATH: `${libDir};${mlxDir};${process.env.PATH || ""}`,
+        OLLAMA_HOST: "127.0.0.1:11435",
+        OLLAMA_MODELS: process.env.OLLAMA_MODELS || "C:\\Users\\admin\\.ollama\\models"
+      };
+
+      const child = spawn(ollamaExe, ["serve"], {
+        env,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true
+      });
+      child.unref();
+
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (await this.checkOllamaHealth()) {
+          console.log(`[VoiceManager] Dedicated Ollama speech daemon online on ${this.ollamaVoiceUrl}`);
+          this.prewarmOllamaVoice().catch(() => {});
+          return true;
+        }
+      }
+
+      console.warn("[VoiceManager] Timed out waiting for dedicated Ollama speech daemon to become ready.");
+      return false;
+    } catch (err) {
+      console.warn(`[VoiceManager] Failed to launch Ollama speech daemon: ${err.message}`);
+      return false;
+    } finally {
+      this._isEnsuringOllama = false;
+    }
   }
 
   /**

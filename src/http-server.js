@@ -158,6 +158,7 @@ export function createHttpActuationServer(
           client,
           hmb,
           voiceManager,
+          agySession: agy,
           delayMs,
           reason
         });

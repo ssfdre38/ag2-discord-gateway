@@ -232,6 +232,49 @@ it("handles session unbinding/resetting cleanly across admin, thread, and user c
   assert.ok(nextThreadSess);
 });
 
+// 3. Persistent Resident Worker Lifecycle Tests
+it("manages persistent resident worker lifecycle and cleanup", () => {
+  const agy = new AgySessionManager();
+  assert.strictEqual(agy.workers.size, 0);
+
+  // Mock worker
+  let closed = false;
+  const mockWorker = {
+    pid: 12345,
+    cwd: process.cwd(),
+    isAdmin: true,
+    isClosed: false,
+    close: () => { closed = true; mockWorker.isClosed = true; }
+  };
+
+  agy.workers.set("test-sess-key", mockWorker);
+  assert.strictEqual(agy.workers.size, 1);
+
+  // Reusing existing warm worker
+  const retrieved = agy.getOrCreateWorker("test-sess-key", { cwd: process.cwd(), isAdmin: true });
+  assert.strictEqual(retrieved, mockWorker);
+  assert.strictEqual(closed, false);
+
+  // Resetting session closes and removes associated worker
+  agy.adminConversationId = "admin-worker-test";
+  let adminClosed = false;
+  agy.workers.set("admin-worker-test", {
+    pid: 54321,
+    cwd: process.cwd(),
+    isAdmin: true,
+    isClosed: false,
+    close: () => { adminClosed = true; }
+  });
+  agy.resetSession({ isAdmin: true });
+  assert.strictEqual(adminClosed, true);
+  assert.strictEqual(agy.workers.has("admin-worker-test"), false);
+
+  // closeAllWorkers disposes any remaining workers
+  agy.closeAllWorkers();
+  assert.strictEqual(closed, true);
+  assert.strictEqual(agy.workers.size, 0);
+});
+
 console.log("\n=======================================================");
 console.log(`   TEST RESULTS: ${passed}/${total} PASSED (${total - passed} FAILED)`);
 console.log("=======================================================\n");

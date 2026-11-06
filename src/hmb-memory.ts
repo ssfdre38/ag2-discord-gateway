@@ -353,8 +353,9 @@ export class HmbMemoryEngine {
   // 🏛️ 64-BIT BINARY .hmb SERIALIZATION & DESERIALIZATION
   // ══════════════════════════════════════════════════════════════════════════
 
-  public saveToHmb(filepath: string): boolean {
+  public saveToHmb(filepath: string = this.vaultPath): boolean {
     try {
+      filepath = filepath || this.vaultPath || path.join(process.cwd(), "data", "memory_vault.hmb");
       const dir = path.dirname(filepath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 

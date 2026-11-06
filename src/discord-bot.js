@@ -638,6 +638,7 @@ export function createDiscordBot() {
         client,
         hmb,
         voiceManager,
+        agySession: agy,
         delayMs: 1000,
         reason: restartReason
       });
@@ -1426,7 +1427,8 @@ export function createDiscordBot() {
                   style: d.style,
                   engine: d.engine,
                   width: d.width,
-                  height: d.height
+                  height: d.height,
+                  negativePrompt: d.negativePrompt
                 });
                 if (genRes?.imagePath && !generatedImageFiles.includes(genRes.imagePath)) {
                   generatedImageFiles.push(genRes.imagePath);

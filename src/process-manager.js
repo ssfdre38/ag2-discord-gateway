@@ -6,6 +6,8 @@
  */
 
 import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
 
 let isRestarting = false;
 let activeTimer = null;
@@ -47,6 +49,7 @@ export function triggerSelfRestart(options = {}) {
     client = null,
     hmb = null,
     voiceManager = null,
+    agySession = null,
     delayMs = 1000,
     reason = "Self-restart requested"
   } = options;
@@ -91,9 +94,21 @@ export function triggerSelfRestart(options = {}) {
         } catch {}
       }
 
+      // Clean up resident CLI daemon workers
+      if (agySession && typeof agySession.closeAllWorkers === "function") {
+        try {
+          agySession.closeAllWorkers();
+        } catch {}
+      }
+
       // Prepare exact spawn arguments preserving node flags (e.g. --watch) and script
       const nodeBinary = process.execPath;
       const spawnArgs = [...process.execArgv, ...process.argv.slice(1)];
+
+      const logDir = path.join(process.cwd(), "data");
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const outLog = fs.openSync(path.join(logDir, "gateway.log"), "a");
+      const errLog = fs.openSync(path.join(logDir, "gateway_error.log"), "a");
 
       console.log(`[ProcessManager] Spawning detached replacement process: ${nodeBinary} ${spawnArgs.join(" ")}`);
 
@@ -101,13 +116,13 @@ export function triggerSelfRestart(options = {}) {
         cwd: process.cwd(),
         env: process.env,
         detached: true,
-        stdio: "inherit",
+        stdio: ["ignore", outLog, errLog],
         windowsHide: false
       });
 
       child.unref();
 
-      console.log(`[ProcessManager] Replacement process spawned (PID: ${child.pid}). Exiting current process (PID: ${process.pid})...`);
+      console.log(`[ProcessManager] Replacement process spawned (PID: ${child.pid}). Logging to ${path.join(logDir, "gateway.log")}. Exiting current process (PID: ${process.pid})...`);
       process.exit(0);
     } catch (err) {
       console.error(`[ProcessManager] Failed to complete self-restart: ${err.message}`);

@@ -52,6 +52,7 @@ export const config = {
   discordToken: process.env.DISCORD_TOKEN || "",
   conversationId: process.env.AG2_CONVERSATION_ID || "",
   agyPath: findAgyExecutable(),
+  enablePersistentDaemon: process.env.AG2_PERSISTENT_DAEMON !== "false",
   channelWorkspaces: parseChannelWorkspaces(process.env.CHANNEL_WORKSPACES || ""),
   defaultWorkspaceDir: process.env.DEFAULT_WORKSPACE_DIR || process.cwd(),
   requireMention: process.env.REQUIRE_MENTION !== "false",
